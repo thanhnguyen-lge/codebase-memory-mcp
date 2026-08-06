@@ -170,9 +170,18 @@ extern const TSLanguage *tree_sitter_objectscript_udl(void);
 extern const TSLanguage *tree_sitter_objectscript_routine(void);
 extern const TSLanguage *tree_sitter_arkts(void);
 extern const TSLanguage *tree_sitter_plsql(void);
+extern const TSLanguage *tree_sitter_dsl(void);
 
 // -- Empty sentinel --
 static const char *empty_types[] = {NULL};
+
+// ==================== DSL ====================
+static const char *dsl_func_types[] = {"function_declaration", NULL};
+static const char *dsl_call_types[] = {"call_function", NULL};
+static const char *dsl_module_types[] = {"include", "run", NULL};
+static const char *dsl_branch_types[] = {"if_statement", "for_statement", "while_statement",
+                                         "do_statement", NULL};
+static const char *dsl_assign_types[] = {"assignment_expression", NULL};
 
 // ==================== GO ====================
 static const char *go_func_types[] = {"function_declaration", "method_declaration", "method_elem",
@@ -2730,6 +2739,11 @@ static const CBMLangSpec lang_specs[CBM_LANG_COUNT] = {
                         plsql_module_types, plsql_call_types, empty_types, empty_types,
                         plsql_branch_types, empty_types, plsql_assign_types, plsql_throw_types,
                         NULL, empty_types, NULL, NULL, tree_sitter_plsql, NULL},
+    // CBM_LANG_DSL — Domain-Specific Language (.scr, .conf, .time, .tbl)
+    [CBM_LANG_DSL] = {CBM_LANG_DSL, dsl_func_types, empty_types, empty_types, dsl_module_types,
+                      dsl_call_types, empty_types, empty_types, dsl_branch_types, empty_types,
+                      dsl_assign_types, empty_types, NULL, empty_types, NULL, NULL, tree_sitter_dsl,
+                      NULL},
 
 };
 

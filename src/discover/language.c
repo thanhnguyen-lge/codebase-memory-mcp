@@ -94,6 +94,13 @@ static const ext_entry_t EXT_TABLE[] = {
     /* Dockerfile */
     {".dockerfile", CBM_LANG_DOCKERFILE},
 
+    /* DSL (Domain-Specific Language) — .conf typically defaults to INI;
+     * projects using .conf for DSL can override via .codebase-memory.json
+     * extra_extensions config. */
+    {".scr", CBM_LANG_DSL},
+    {".time", CBM_LANG_DSL},
+    {".tbl", CBM_LANG_DSL},
+
     /* Elixir */
     {".ex", CBM_LANG_ELIXIR},
     {".exs", CBM_LANG_ELIXIR},
@@ -1159,6 +1166,91 @@ static bool str_contains(const char *haystack, const char *needle) {
     return strstr(haystack, needle) != NULL;
 }
 
+/* DSL marker detection helpers */
+static bool has_dsl_function_marker(const char *buf) {
+    /* DSL: #function_name { ... } */
+    return str_contains(buf, "#") && (str_contains(buf, "function_") ||
+                                       (strchr(buf, '#') && strchr(strchr(buf, '#'), '{')));
+}
+
+static bool has_dsl_include_marker(const char *buf) {
+    /* DSL: INCLUDE('...') or RUN('...') */
+    return str_contains(buf, "INCLUDE(") || str_contains(buf, "RUN(");
+}
+
+static bool has_dsl_call_marker(const char *buf) {
+    /* DSL: !function_name() or $variable */
+    return str_contains(buf, "!") || (str_contains(buf, "$") &&
+                                      (str_contains(buf, ".") || str_contains(buf, "(")));
+}
+
+static bool has_dsl_control_flow(const char *buf) {
+    /* DSL: if (...) { ... }, while (...) { ... }, for (...) { ... } */
+    const char *line = buf;
+    while (*line) {
+        const char *p = line;
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+        if ((strncmp(p, "if (", SLEN("if (")) == 0 ||
+             strncmp(p, "while (", SLEN("while (")) == 0 ||
+             strncmp(p, "for (", SLEN("for (")) == 0 ||
+             strncmp(p, "do {", SLEN("do {")) == 0) &&
+            strchr(p, '{')) {
+            return true;
+        }
+        const char *nl = strchr(line, '\n');
+        if (!nl) {
+            break;
+        }
+        line = nl + SKIP_ONE;
+    }
+    return false;
+}
+
+static bool is_kconfig_format(const char *buf) {
+    /* Kconfig/INI format: CONFIG_KEY=value or KEY=value, mostly uppercase keys */
+    int config_lines = 0;
+    int total_lines = 0;
+    const char *line = buf;
+
+    while (*line && total_lines < 50) {
+        const char *p = line;
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+
+        /* Skip empty lines and comments */
+        if (*p == '\n' || *p == '\0' || *p == '#' || *p == ';') {
+            const char *nl = strchr(line, '\n');
+            if (!nl) break;
+            line = nl + SKIP_ONE;
+            continue;
+        }
+
+        /* Check for CONFIG_XXX=value or KEY=value pattern */
+        const char *eq = strchr(p, '=');
+        if (eq) {
+            const char *key_end = eq;
+            while (key_end > p && (isalnum((unsigned char)*(key_end - 1)) ||
+                                   *(key_end - 1) == '_')) {
+                key_end--;
+            }
+            if (key_end < eq) {
+                config_lines++;
+            }
+        }
+
+        total_lines++;
+        const char *nl = strchr(line, '\n');
+        if (!nl) break;
+        line = nl + SKIP_ONE;
+    }
+
+    /* If more than 50% of non-comment lines have KEY=value, it's Kconfig/INI */
+    return total_lines > 0 && (config_lines * 100 / total_lines) > 50;
+}
+
 static bool has_objc_markers(const char *buf) {
     return str_contains(buf, "@interface") || str_contains(buf, "@implementation") ||
            str_contains(buf, "@protocol") || str_contains(buf, "@property") ||
@@ -1214,6 +1306,37 @@ static bool has_matlab_line_markers(const char *buf) {
         line = nl + SKIP_ONE;
     }
     return false;
+}
+
+CBMLanguage cbm_disambiguate_conf(const char *path) {
+    if (!path) {
+        return CBM_LANG_INI;
+    }
+
+    FILE *f = cbm_fopen(path, "r");
+    if (!f) {
+        return CBM_LANG_INI;
+    }
+
+    /* Read first 4KB */
+    char buf[CBM_SZ_4K + SKIP_ONE];
+    size_t n = fread(buf, SKIP_ONE, CBM_SZ_4K, f);
+    buf[n] = '\0';
+    (void)fclose(f);
+
+    /* Check for DSL markers first */
+    if (has_dsl_function_marker(buf) || has_dsl_include_marker(buf) ||
+        has_dsl_call_marker(buf) || has_dsl_control_flow(buf)) {
+        return CBM_LANG_DSL;
+    }
+
+    /* Check if it's Kconfig/INI format */
+    if (is_kconfig_format(buf)) {
+        return CBM_LANG_INI;
+    }
+
+    /* Fallback to INI (more common for .conf files) */
+    return CBM_LANG_INI;
 }
 
 CBMLanguage cbm_disambiguate_m(const char *path) {

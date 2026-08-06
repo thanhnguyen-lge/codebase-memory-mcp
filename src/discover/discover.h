@@ -75,6 +75,12 @@ CBMLanguage cbm_language_from_shebang(const char *path);
  * leading '<'), otherwise CBM_LANG_CFSCRIPT for script-dialect components.
  * On read failure, defaults to CBM_LANG_CFSCRIPT. */
 CBMLanguage cbm_disambiguate_cfc(const char *path);
+/* Disambiguate .conf files by reading first 4KB of content.
+ * Detects whether the file is DSL (with #functions, INCLUDE, RUN, control flow)
+ * or Kconfig/INI format (key=value pairs).
+ * Returns CBM_LANG_DSL or CBM_LANG_INI.
+ * On read failure, defaults to CBM_LANG_INI. */
+CBMLanguage cbm_disambiguate_conf(const char *path);
 
 /* ── Gitignore pattern matching ──────────────────────────────────── */
 

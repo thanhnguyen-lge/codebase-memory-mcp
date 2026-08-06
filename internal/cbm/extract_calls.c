@@ -985,6 +985,20 @@ static char *extract_solidity_callee(CBMArena *a, TSNode node, const char *sourc
     return NULL;
 }
 
+// DSL: call_function's first named child is the callee identifier.
+static char *extract_dsl_callee(CBMArena *a, TSNode node, const char *source, const char *nk) {
+    if (strcmp(nk, "call_function") != 0) {
+        return NULL;
+    }
+    if (ts_node_named_child_count(node) > 0) {
+        TSNode head = ts_node_named_child(node, 0);
+        if (!ts_node_is_null(head) && strcmp(ts_node_type(head), "identifier") == 0) {
+            return cbm_node_text(a, head, source);
+        }
+    }
+    return NULL;
+}
+
 // Groovy: function_call's first named child is the callee identifier (the generic
 // first-child fallback misses it because child 0 is anonymous).
 static char *extract_groovy_callee(CBMArena *a, TSNode node, const char *source, const char *nk) {
@@ -1566,6 +1580,9 @@ static char *extract_callee_lang_specific(CBMArena *a, TSNode node, const char *
     }
     if (lang == CBM_LANG_SOLIDITY) {
         return extract_solidity_callee(a, node, source, nk);
+    }
+    if (lang == CBM_LANG_DSL) {
+        return extract_dsl_callee(a, node, source, nk);
     }
     if (lang == CBM_LANG_GROOVY) {
         return extract_groovy_callee(a, node, source, nk);

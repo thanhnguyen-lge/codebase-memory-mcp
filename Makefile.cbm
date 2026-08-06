@@ -216,6 +216,16 @@ ELF_HARDENING_FLAGS := -Wl,-z,noexecstack -Wl,-z,separate-code \
 endif
 endif
 
+# glibc < 2.34 (e.g. Ubuntu 20.04, glibc 2.31) still ships dlopen/dlsym in a
+# separate libdl; newer glibc folds it into libc and keeps libdl.so as a stub,
+# so linking it is harmless there. MinGW has no libdl.
+DL_LIBS :=
+ifeq ($(IS_LINUX),yes)
+ifneq ($(IS_MINGW),yes)
+DL_LIBS := -ldl
+endif
+endif
+
 # The POSIX wrap shim exists only so the profiler can observe allocations. It
 # must never reach a sanitized build: the Linux/macOS test builds are CRT+ASan,
 # and redirecting malloc into mimalloc underneath ASan's own interception mixes
@@ -225,9 +235,9 @@ endif
 # instead of the system libstdc++ (scripts/msan.sh overrides both vars).
 CXX_STDLIB ?= -lstdc++
 CXX_STDLIB_FLAGS ?=
-LDFLAGS = -lm $(CXX_STDLIB) -lpthread -lz $(WIN32_LIBS) $(STATIC_FLAGS) $(MIMALLOC_WRAP_FLAGS) $(ELF_HARDENING_FLAGS)
-LDFLAGS_TEST = -lm $(CXX_STDLIB) -lpthread -lz $(SANITIZE) $(WIN32_LIBS) $(MIMALLOC_WRAP_FLAGS) $(ELF_HARDENING_FLAGS)
-LDFLAGS_TSAN = -lm $(CXX_STDLIB) -lpthread -lz $(TSAN_SANITIZE) $(WIN32_LIBS) $(MIMALLOC_WRAP_FLAGS) $(ELF_HARDENING_FLAGS)
+LDFLAGS = -lm $(CXX_STDLIB) -lpthread -lz $(DL_LIBS) $(WIN32_LIBS) $(STATIC_FLAGS) $(MIMALLOC_WRAP_FLAGS) $(ELF_HARDENING_FLAGS)
+LDFLAGS_TEST = -lm $(CXX_STDLIB) -lpthread -lz $(DL_LIBS) $(SANITIZE) $(WIN32_LIBS) $(MIMALLOC_WRAP_FLAGS) $(ELF_HARDENING_FLAGS)
+LDFLAGS_TSAN = -lm $(CXX_STDLIB) -lpthread -lz $(DL_LIBS) $(TSAN_SANITIZE) $(WIN32_LIBS) $(MIMALLOC_WRAP_FLAGS) $(ELF_HARDENING_FLAGS)
 
 # ── Source files ─────────────────────────────────────────────────
 

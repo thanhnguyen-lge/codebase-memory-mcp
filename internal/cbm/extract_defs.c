@@ -334,8 +334,24 @@ static TSNode resolve_vimscript_func_name(TSNode node) {
     return null_node;
 }
 
+// Resolve function name for DSL: #name { ... } — name is first identifier child
+static TSNode resolve_dsl_func_name(TSNode node) {
+    uint32_t nc = ts_node_named_child_count(node);
+    for (uint32_t i = 0; i < nc; i++) {
+        TSNode child = ts_node_named_child(node, i);
+        if (!ts_node_is_null(child) && strcmp(ts_node_type(child), "identifier") == 0) {
+            return child;
+        }
+    }
+    TSNode null_node = {0};
+    return null_node;
+}
+
 // Resolve function name for scripting/niche languages (Lua, OCaml, SQL, Zig, VimScript, Julia).
 static TSNode resolve_func_name_scripting(TSNode node, CBMLanguage lang, const char *kind) {
+    if (lang == CBM_LANG_DSL && strcmp(kind, "function_declaration") == 0) {
+        return resolve_dsl_func_name(node);
+    }
     if (lang == CBM_LANG_LUA && strcmp(kind, "function_definition") == 0) {
         return resolve_lua_func_name(node);
     }
