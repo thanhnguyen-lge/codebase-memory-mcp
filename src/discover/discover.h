@@ -39,6 +39,13 @@ const char *cbm_language_name(CBMLanguage lang);
  * On read failure, defaults to CBM_LANG_MATLAB. */
 CBMLanguage cbm_disambiguate_m(const char *path);
 
+/* Disambiguate .conf files by reading first 4KB of content.
+ * Detects whether the file is DSL (with #functions, INCLUDE, RUN, control flow)
+ * or Kconfig/INI format (key=value pairs).
+ * Returns CBM_LANG_DSL or CBM_LANG_INI.
+ * On read failure, defaults to CBM_LANG_INI. */
+CBMLanguage cbm_disambiguate_conf(const char *path);
+
 /* ── Gitignore pattern matching ──────────────────────────────────── */
 
 typedef struct cbm_gitignore cbm_gitignore_t;

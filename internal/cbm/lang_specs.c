@@ -164,9 +164,18 @@ extern const TSLanguage *tree_sitter_apex(void);
 extern const TSLanguage *tree_sitter_soql(void);
 extern const TSLanguage *tree_sitter_sosl(void);
 extern const TSLanguage *tree_sitter_pine(void);
+extern const TSLanguage *tree_sitter_dsl(void);
 
 // -- Empty sentinel --
 static const char *empty_types[] = {NULL};
+
+// ==================== DSL ====================
+static const char *dsl_func_types[] = {"function_declaration", NULL};
+static const char *dsl_call_types[] = {"call_function", NULL};
+static const char *dsl_module_types[] = {"include", "run", NULL};
+static const char *dsl_branch_types[] = {"if_statement", "for_statement", "while_statement",
+                                         "do_statement", NULL};
+static const char *dsl_assign_types[] = {"assignment_expression", NULL};
 
 // ==================== GO ====================
 static const char *go_func_types[] = {"function_declaration", "method_declaration", "method_elem",
@@ -2570,6 +2579,12 @@ static const CBMLangSpec lang_specs[CBM_LANG_COUNT] = {
                        pine_module_types, pine_call_types, empty_types, empty_types,
                        pine_branch_types, pine_var_types, pine_assign_types, empty_types, NULL,
                        empty_types, NULL, NULL, tree_sitter_pine, NULL},
+
+    // CBM_LANG_DSL — Domain-Specific Language (.scr, .conf, .time, .tbl)
+    [CBM_LANG_DSL] = {CBM_LANG_DSL, dsl_func_types, empty_types, empty_types, dsl_module_types,
+                      dsl_call_types, empty_types, empty_types, dsl_branch_types, empty_types,
+                      dsl_assign_types, empty_types, NULL, empty_types, NULL, NULL, tree_sitter_dsl,
+                      NULL},
 
 };
 

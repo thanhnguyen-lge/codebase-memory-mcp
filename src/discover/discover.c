@@ -23,6 +23,8 @@
 #include <stdlib.h>
 #include <string.h> // strdup
 #include <sys/stat.h>
+#include <sys/types.h> // off_t
+#include <unistd.h> // lstat
 
 int cbm_gitignore_match_result(const cbm_gitignore_t *gi, const char *rel_path, bool is_dir);
 
@@ -566,7 +568,7 @@ static bool should_skip_file(const char *entry_name, const char *rel_path,
     return global_ignored;
 }
 
-/* Detect language for a file, handling .m disambiguation and JSON filtering. */
+/* Detect language for a file, handling .m and .conf disambiguation and JSON filtering. */
 static CBMLanguage detect_file_language(const char *entry_name, const char *abs_path) {
     CBMLanguage lang = cbm_language_for_filename(entry_name);
     if (lang == CBM_LANG_COUNT) {
@@ -576,6 +578,10 @@ static CBMLanguage detect_file_language(const char *entry_name, const char *abs_
     const char *dot = strrchr(entry_name, '.');
     if (dot && strcmp(dot, ".m") == 0) {
         lang = cbm_disambiguate_m(abs_path);
+    }
+    /* Special: .conf files need content-based disambiguation (DSL vs Kconfig/INI) */
+    if (dot && strcmp(dot, ".conf") == 0 && lang == CBM_LANG_INI) {
+        lang = cbm_disambiguate_conf(abs_path);
     }
     /* Check ignored JSON files */
     if (lang == CBM_LANG_JSON && str_in_list(entry_name, IGNORED_JSON_FILES)) {
