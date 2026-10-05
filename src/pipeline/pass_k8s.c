@@ -125,8 +125,7 @@ static void handle_kustomize(cbm_pipeline_ctx_t *ctx, const char *path, const ch
             }
 
             /* Compute target file QN */
-            char *target_qn =
-                cbm_pipeline_fqn_compute(ctx->project_name, imp->module_path, "__file__");
+            char *target_qn = cbm_pipeline_fqn_file(ctx->project_name, imp->module_path);
             if (!target_qn) {
                 continue;
             }
@@ -384,7 +383,7 @@ static void handle_k8s_manifest(cbm_pipeline_ctx_t *ctx, const char *path, const
     }
 
     /* Compute file node QN for DEFINES edges */
-    char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel_path, "__file__");
+    char *file_qn = cbm_pipeline_fqn_file(ctx->project_name, rel_path);
     const cbm_gbuf_node_t *file_node = file_qn ? cbm_gbuf_find_by_qn(ctx->gbuf, file_qn) : NULL;
     free(file_qn);
 
@@ -447,7 +446,7 @@ static void handle_helm_chart(cbm_pipeline_ctx_t *ctx, const char *rel_path, con
                                             0, "{\"source\":\"helm\"}");
     free(chart_qn);
 
-    char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel_path, "__file__");
+    char *file_qn = cbm_pipeline_fqn_file(ctx->project_name, rel_path);
     const cbm_gbuf_node_t *file_node = file_qn ? cbm_gbuf_find_by_qn(ctx->gbuf, file_qn) : NULL;
     if (file_node && chart_id > 0) {
         cbm_gbuf_insert_edge(ctx->gbuf, file_node->id, chart_id, "DEFINES", "{}");
@@ -608,7 +607,7 @@ static void handle_dep_manifest(cbm_pipeline_ctx_t *ctx, const char *rel_path, c
     if (!source) {
         return;
     }
-    char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel_path, "__file__");
+    char *file_qn = cbm_pipeline_fqn_file(ctx->project_name, rel_path);
     const cbm_gbuf_node_t *src = file_qn ? cbm_gbuf_find_by_qn(ctx->gbuf, file_qn) : NULL;
     free(file_qn);
     if (!src) {

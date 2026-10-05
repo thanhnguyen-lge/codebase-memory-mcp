@@ -322,7 +322,7 @@ static int pxc_build_import_map(const cbm_gbuf_t *gbuf, const char *project_name
     *out_vals = NULL;
     *out_count = 0;
 
-    char *file_qn = cbm_pipeline_fqn_compute(project_name, rel_path, "__file__");
+    char *file_qn = cbm_pipeline_fqn_file(project_name, rel_path);
     if (!file_qn)
         return 0;
     const cbm_gbuf_node_t *file_node = cbm_gbuf_find_by_qn(gbuf, file_qn);

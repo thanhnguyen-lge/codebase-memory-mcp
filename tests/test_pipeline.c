@@ -408,7 +408,7 @@ TEST(pipeline_branch_root_structure) {
     ASSERT_STR_EQ(branch_node.name, "working-tree");
     ASSERT_NOT_NULL(strstr(branch_node.properties_json, "\"is_git\":false"));
     char *root_folder_qn = cbm_pipeline_fqn_folder(project, "pkg");
-    char *root_file_qn = cbm_pipeline_fqn_compute(project, "main.go", "__file__");
+    char *root_file_qn = cbm_pipeline_fqn_file(project, "main.go");
     ASSERT_NOT_NULL(root_folder_qn);
     ASSERT_NOT_NULL(root_file_qn);
     rc = cbm_store_find_node_by_qn(s, project, root_folder_qn, &root_folder_node);
@@ -460,6 +460,212 @@ TEST(pipeline_branch_root_structure) {
     cbm_store_close(s);
     cbm_pipeline_free(p);
     teardown_test_repo();
+    PASS();
+}
+
+/* Files that differ only by extension (or by an `index` / `__init__` stem,
+ * or dotfiles in one dir) used to share one File-node QN because the File QN
+ * went through the symbol FQN scheme, which strips both. The UNIQUE QN kept
+ * one survivor and silently dropped the rest. Every discovered file must get
+ * its own File node. Every entry must be a discoverable file type, or it never
+ * reaches pass_structure. Legacy collisions: py/__init__.py with py.py
+ * (proj.py.__file__), dot/.env with dot/.gitattributes (proj.dot.__file__). */
+static const char *const k_file_qn_collision_files[] = {
+    "conf/watersupply.conf", "conf/watersupply.time", "conf/watersupply.tbl",
+    "web/api.ts",            "web/api.js",            "pkg/index.ts",
+    "pkg/index.js",          "py/__init__.py",        "py.py",
+    "dot/.env",              "dot/.gitattributes",    "Makefile",
+    "Makefile.mk",
+};
+enum { FILE_QN_COLLISION_COUNT = (int)(sizeof(k_file_qn_collision_files) / sizeof(char *)) };
+
+static int write_file_qn_collision_repo(const char *root) {
+    for (int i = 0; i < FILE_QN_COLLISION_COUNT; i++) {
+        if (th_write_file(TH_PATH(root, k_file_qn_collision_files[i]), "x = 1\n") != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* Count File nodes whose file_path equals rel. */
+static int count_file_nodes_for(const cbm_node_t *files, int n, const char *rel) {
+    int hits = 0;
+    for (int i = 0; i < n; i++) {
+        if (files[i].file_path && strcmp(files[i].file_path, rel) == 0) {
+            hits++;
+        }
+    }
+    return hits;
+}
+
+TEST(pipeline_file_qn_keeps_extension) {
+    char tmp[256];
+    snprintf(tmp, sizeof(tmp), "/tmp/cbm_fileqn_XXXXXX");
+    if (!cbm_mkdtemp(tmp)) {
+        FAIL("failed to create temp dir");
+    }
+    ASSERT_EQ(write_file_qn_collision_repo(tmp), 0);
+
+    /* DB lives outside the repo so it is not discovered as a file. */
+    char db_dir[256];
+    snprintf(db_dir, sizeof(db_dir), "/tmp/cbm_fileqn_db_XXXXXX");
+    if (!cbm_mkdtemp(db_dir)) {
+        FAIL("failed to create temp dir");
+    }
+    char db_path[512];
+    snprintf(db_path, sizeof(db_path), "%s/test.db", db_dir);
+    cbm_pipeline_t *p = cbm_pipeline_new(tmp, db_path, CBM_MODE_FULL);
+    ASSERT_NOT_NULL(p);
+    ASSERT_EQ(cbm_pipeline_run(p), 0);
+
+    cbm_store_t *s = cbm_store_open_path(db_path);
+    ASSERT_NOT_NULL(s);
+    cbm_node_t *files = NULL;
+    int nfiles = 0;
+    ASSERT_EQ(cbm_store_find_nodes_by_label(s, cbm_pipeline_project_name(p), "File", &files,
+                                            &nfiles),
+              CBM_STORE_OK);
+
+    int missing = 0;
+    for (int i = 0; i < FILE_QN_COLLISION_COUNT; i++) {
+        if (count_file_nodes_for(files, nfiles, k_file_qn_collision_files[i]) != 1) {
+            printf("  missing File node: %s\n", k_file_qn_collision_files[i]);
+            missing++;
+        }
+    }
+
+    cbm_store_free_nodes(files, nfiles);
+    cbm_store_close(s);
+    cbm_pipeline_free(p);
+    th_rmtree(tmp);
+    th_rmtree(db_dir);
+
+    ASSERT_EQ(missing, 0);
+    ASSERT_EQ(nfiles, FILE_QN_COLLISION_COUNT);
+    PASS();
+}
+
+/* The incremental path must build File nodes exactly like the full path
+ * (basename as name, "extension" property) and keep same-stem files apart. */
+TEST(pipeline_incremental_file_node_matches_full) {
+    char tmp[256];
+    snprintf(tmp, sizeof(tmp), "/tmp/cbm_fileqn_inc_XXXXXX");
+    if (!cbm_mkdtemp(tmp)) {
+        FAIL("failed to create temp dir");
+    }
+    ASSERT_EQ(write_file_qn_collision_repo(tmp), 0);
+    char db_dir[256];
+    snprintf(db_dir, sizeof(db_dir), "/tmp/cbm_fileqn_incdb_XXXXXX");
+    if (!cbm_mkdtemp(db_dir)) {
+        FAIL("failed to create temp dir");
+    }
+    char db_path[512];
+    snprintf(db_path, sizeof(db_path), "%s/test.db", db_dir);
+
+    cbm_pipeline_t *p1 = cbm_pipeline_new(tmp, db_path, CBM_MODE_FULL);
+    ASSERT_NOT_NULL(p1);
+    ASSERT_EQ(cbm_pipeline_run(p1), 0);
+    char project[256];
+    snprintf(project, sizeof(project), "%s", cbm_pipeline_project_name(p1));
+    cbm_pipeline_free(p1);
+
+    /* Change one file so the second run re-upserts its File node. */
+    ASSERT_EQ(th_write_file(TH_PATH(tmp, "web/api.ts"), "x = 2\ny = 3\n"), 0);
+    cbm_pipeline_t *p2 = cbm_pipeline_new(tmp, db_path, CBM_MODE_FULL);
+    ASSERT_NOT_NULL(p2);
+    ASSERT_EQ(cbm_pipeline_run(p2), 0);
+    cbm_pipeline_free(p2);
+
+    cbm_store_t *s = cbm_store_open_path(db_path);
+    ASSERT_NOT_NULL(s);
+    int nfiles = 0;
+    cbm_node_t *files = NULL;
+    ASSERT_EQ(cbm_store_find_nodes_by_label(s, project, "File", &files, &nfiles), CBM_STORE_OK);
+    char *api_qn = cbm_pipeline_fqn_file(project, "web/api.ts");
+    cbm_node_t api = {0};
+    int api_rc = cbm_store_find_node_by_qn(s, project, api_qn, &api);
+    bool name_ok = api_rc == CBM_STORE_OK && api.name && strcmp(api.name, "api.ts") == 0;
+    bool ext_ok = api_rc == CBM_STORE_OK && api.properties_json &&
+                  strstr(api.properties_json, "\"extension\":\".ts\"") != NULL;
+
+    cbm_node_free_fields(&api);
+    free(api_qn);
+    cbm_store_free_nodes(files, nfiles);
+    cbm_store_close(s);
+    th_rmtree(tmp);
+    th_rmtree(db_dir);
+
+    ASSERT_EQ(nfiles, FILE_QN_COLLISION_COUNT);
+    ASSERT_EQ(api_rc, CBM_STORE_OK);
+    ASSERT_TRUE(name_ok);
+    ASSERT_TRUE(ext_ok);
+    PASS();
+}
+
+/* An index built with the legacy File-QN scheme (extension stripped) must be
+ * rebuilt in full; an incremental run would leave the stale node in place. */
+TEST(pipeline_legacy_file_qn_forces_full_reindex) {
+    char tmp[256];
+    snprintf(tmp, sizeof(tmp), "/tmp/cbm_fileqn_legacy_XXXXXX");
+    if (!cbm_mkdtemp(tmp)) {
+        FAIL("failed to create temp dir");
+    }
+    ASSERT_EQ(th_write_file(TH_PATH(tmp, "main.py"), "def foo():\n    pass\n"), 0);
+    char db_dir[256];
+    snprintf(db_dir, sizeof(db_dir), "/tmp/cbm_fileqn_legdb_XXXXXX");
+    if (!cbm_mkdtemp(db_dir)) {
+        FAIL("failed to create temp dir");
+    }
+    char db_path[512];
+    snprintf(db_path, sizeof(db_path), "%s/test.db", db_dir);
+
+    cbm_pipeline_t *p1 = cbm_pipeline_new(tmp, db_path, CBM_MODE_FULL);
+    ASSERT_NOT_NULL(p1);
+    ASSERT_EQ(cbm_pipeline_run(p1), 0);
+    char project[256];
+    snprintf(project, sizeof(project), "%s", cbm_pipeline_project_name(p1));
+    cbm_pipeline_free(p1);
+
+    /* Rewrite the File node to its legacy QN, as an older build stored it. */
+    char *new_qn = cbm_pipeline_fqn_file(project, "main.py");
+    char legacy_qn[512];
+    snprintf(legacy_qn, sizeof(legacy_qn), "%s.main.__file__", project);
+    sqlite3 *db = NULL;
+    ASSERT_EQ(sqlite3_open(db_path, &db), SQLITE_OK);
+    sqlite3_stmt *st = NULL;
+    ASSERT_EQ(sqlite3_prepare_v2(db, "UPDATE nodes SET qualified_name=?1 WHERE qualified_name=?2",
+                                 -1, &st, NULL),
+              SQLITE_OK);
+    sqlite3_bind_text(st, 1, legacy_qn, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 2, new_qn, -1, SQLITE_TRANSIENT);
+    ASSERT_EQ(sqlite3_step(st), SQLITE_DONE);
+    int changed = sqlite3_changes(db);
+    sqlite3_finalize(st);
+    sqlite3_close(db);
+    ASSERT_EQ(changed, 1);
+
+    /* Re-run with no source change: must rebuild, not reuse the stale index. */
+    cbm_pipeline_t *p2 = cbm_pipeline_new(tmp, db_path, CBM_MODE_FULL);
+    ASSERT_NOT_NULL(p2);
+    ASSERT_EQ(cbm_pipeline_run(p2), 0);
+    cbm_pipeline_free(p2);
+
+    cbm_store_t *s = cbm_store_open_path(db_path);
+    ASSERT_NOT_NULL(s);
+    cbm_node_t n_new = {0};
+    cbm_node_t n_old = {0};
+    int rc_new = cbm_store_find_node_by_qn(s, project, new_qn, &n_new);
+    int rc_old = cbm_store_find_node_by_qn(s, project, legacy_qn, &n_old);
+    cbm_node_free_fields(&n_new);
+    cbm_node_free_fields(&n_old);
+    cbm_store_close(s);
+    free(new_qn);
+    th_rmtree(tmp);
+    th_rmtree(db_dir);
+
+    ASSERT_EQ(rc_new, CBM_STORE_OK);
+    ASSERT_NEQ(rc_old, CBM_STORE_OK);
     PASS();
 }
 
@@ -6719,6 +6925,9 @@ SUITE(pipeline) {
     RUN_TEST(pipeline_adr_survives_full_reindex);
     RUN_TEST(pipeline_structure_edges);
     RUN_TEST(pipeline_branch_root_structure);
+    RUN_TEST(pipeline_file_qn_keeps_extension);
+    RUN_TEST(pipeline_incremental_file_node_matches_full);
+    RUN_TEST(pipeline_legacy_file_qn_forces_full_reindex);
     RUN_TEST(pipeline_project_name_derived);
     RUN_TEST(pipeline_fast_mode);
     /* Definitions pass */

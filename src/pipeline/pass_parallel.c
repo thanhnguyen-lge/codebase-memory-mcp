@@ -532,7 +532,7 @@ static int build_import_map(const cbm_gbuf_t *gbuf, const char *project_name, co
     *out_vals = NULL;
     *out_count = 0;
 
-    char *file_qn = cbm_pipeline_fqn_compute(project_name, rel_path, "__file__");
+    char *file_qn = cbm_pipeline_fqn_file(project_name, rel_path);
     const cbm_gbuf_node_t *file_node = cbm_gbuf_find_by_qn(gbuf, file_qn);
     free(file_qn);
     if (!file_node) {
@@ -1202,7 +1202,7 @@ static int register_and_link_def(cbm_pipeline_ctx_t *ctx, const CBMDefinition *d
         cbm_registry_add(ctx->registry, def->name, def->qualified_name, def->label);
         (*reg_entries)++;
     }
-    char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel, "__file__");
+    char *file_qn = cbm_pipeline_fqn_file(ctx->project_name, rel);
     const cbm_gbuf_node_t *file_node = cbm_gbuf_find_by_qn(ctx->gbuf, file_qn);
     const cbm_gbuf_node_t *def_node = cbm_gbuf_find_by_qn(ctx->gbuf, def->qualified_name);
     if (file_node && def_node) {
@@ -1223,7 +1223,7 @@ static int register_and_link_def(cbm_pipeline_ctx_t *ctx, const CBMDefinition *d
 static int create_imports_edges(cbm_pipeline_ctx_t *ctx, const CBMFileResult *result,
                                 const char *rel, CBMHashTable *namespace_map) {
     int count = 0;
-    char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel, "__file__");
+    char *file_qn = cbm_pipeline_fqn_file(ctx->project_name, rel);
     const cbm_gbuf_node_t *source_node = cbm_gbuf_find_by_qn(ctx->gbuf, file_qn);
     if (!source_node) {
         free(file_qn);
@@ -1257,7 +1257,7 @@ static const cbm_gbuf_node_t *find_channel_src(cbm_pipeline_ctx_t *ctx, const CB
         node = cbm_gbuf_find_by_qn(ctx->gbuf, ch->enclosing_func_qn);
     }
     if (!node) {
-        char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel, "__file__");
+        char *file_qn = cbm_pipeline_fqn_file(ctx->project_name, rel);
         node = cbm_gbuf_find_by_qn(ctx->gbuf, file_qn);
         free(file_qn);
     }
@@ -2053,7 +2053,7 @@ static const cbm_gbuf_node_t *find_source_node(const cbm_gbuf_t *gbuf, const cha
         }
     }
     if (!src) {
-        char *file_qn = cbm_pipeline_fqn_compute(project, rel, "__file__");
+        char *file_qn = cbm_pipeline_fqn_file(project, rel);
         src = cbm_gbuf_find_by_qn(gbuf, file_qn);
         free(file_qn);
     }

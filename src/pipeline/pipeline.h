@@ -133,6 +133,11 @@ char *cbm_pipeline_fqn_compute(const char *project, const char *rel_path, const 
 /* Module QN: project.dir.parts (no name). Caller must free(). */
 char *cbm_pipeline_fqn_module(const char *project, const char *rel_path);
 
+/* File-node QN: project.dir.parts.basename.__file__. Keeps the extension and
+ * any __init__/index stem so every file gets a distinct QN. Use this (never
+ * cbm_pipeline_fqn_compute with "__file__") for File nodes. Caller must free(). */
+char *cbm_pipeline_fqn_file(const char *project, const char *rel_path);
+
 /* Language-aware module QN. When `module_is_dir` is true (Java/Go package
  * semantics) the module is derived from the CONTAINING DIRECTORY (the filename
  * stem is dropped), so it agrees with the extraction-side def QNs; when false

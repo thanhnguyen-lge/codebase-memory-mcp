@@ -439,8 +439,8 @@ int cbm_pipeline_githistory_apply(cbm_pipeline_ctx_t *ctx, const cbm_githistory_
     for (int i = 0; i < result->count; i++) {
         const cbm_change_coupling_t *cc = &result->couplings[i];
 
-        char *qn_a = cbm_pipeline_fqn_compute(ctx->project_name, cc->file_a, "__file__");
-        char *qn_b = cbm_pipeline_fqn_compute(ctx->project_name, cc->file_b, "__file__");
+        char *qn_a = cbm_pipeline_fqn_file(ctx->project_name, cc->file_a);
+        char *qn_b = cbm_pipeline_fqn_file(ctx->project_name, cc->file_b);
 
         const cbm_gbuf_node_t *node_a = cbm_gbuf_find_by_qn(ctx->gbuf, qn_a);
         const cbm_gbuf_node_t *node_b = cbm_gbuf_find_by_qn(ctx->gbuf, qn_b);
@@ -467,7 +467,7 @@ int cbm_pipeline_githistory_apply(cbm_pipeline_ctx_t *ctx, const cbm_githistory_
      * well-formed even for paths with quotes or backslashes. */
     for (int i = 0; i < result->file_temporal_count; i++) {
         const cbm_file_temporal_t *ft = &result->file_temporal[i];
-        char *qn = cbm_pipeline_fqn_compute(ctx->project_name, ft->file_path, "__file__");
+        char *qn = cbm_pipeline_fqn_file(ctx->project_name, ft->file_path);
         const cbm_gbuf_node_t *node = cbm_gbuf_find_by_qn(ctx->gbuf, qn);
         free(qn);
         if (!node) {

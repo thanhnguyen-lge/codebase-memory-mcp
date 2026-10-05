@@ -143,7 +143,7 @@ static int build_import_map(cbm_pipeline_ctx_t *ctx, const char *rel_path,
     }
 
     /* Slow path: scan graph buffer IMPORTS edges + parse JSON properties */
-    char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel_path, "__file__");
+    char *file_qn = cbm_pipeline_fqn_file(ctx->project_name, rel_path);
     const cbm_gbuf_node_t *file_node = cbm_gbuf_find_by_qn(ctx->gbuf, file_qn);
     free(file_qn);
     if (!file_node) {
@@ -433,7 +433,7 @@ static const cbm_gbuf_node_t *calls_find_source(cbm_pipeline_ctx_t *ctx, const c
         }
     }
     if (!src) {
-        char *fqn = cbm_pipeline_fqn_compute(ctx->project_name, rel, "__file__");
+        char *fqn = cbm_pipeline_fqn_file(ctx->project_name, rel);
         src = cbm_gbuf_find_by_qn(ctx->gbuf, fqn);
         free(fqn);
     }

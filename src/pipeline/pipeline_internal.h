@@ -140,6 +140,12 @@ void cbm_pipeline_set_pkgmap(CBMHashTable *map);
 char *cbm_pipeline_resolve_module(const cbm_pipeline_ctx_t *ctx, const char *source_rel,
                                   const char *module_path);
 
+/* Upsert the File node for `rel` (name = basename, props = {"extension"}),
+ * logging a warning if another file already holds the same File QN. Shared by
+ * the full and incremental pipelines so both build identical File nodes.
+ * Returns the File QN (caller must free()), or NULL on allocation failure. */
+char *cbm_pipeline_upsert_file_node(cbm_gbuf_t *gb, const char *project, const char *rel);
+
 /* Resolve an import to its in-graph target node, or NULL if unresolvable.
  *
  * Resolution order (first hit wins):

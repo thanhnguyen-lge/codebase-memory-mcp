@@ -121,7 +121,7 @@ static int build_import_map_from_cache(cbm_pipeline_ctx_t *ctx, const CBMFileRes
 static int build_import_map_from_edges(cbm_pipeline_ctx_t *ctx, const char *rel_path,
                                        const char ***out_keys, const char ***out_vals,
                                        int *out_count) {
-    char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel_path, "__file__");
+    char *file_qn = cbm_pipeline_fqn_file(ctx->project_name, rel_path);
     const cbm_gbuf_node_t *file_node = cbm_gbuf_find_by_qn(ctx->gbuf, file_qn);
     free(file_qn);
     if (!file_node) {
@@ -205,7 +205,7 @@ static const cbm_gbuf_node_t *find_enclosing_node(cbm_pipeline_ctx_t *ctx, const
         }
     }
     if (!node) {
-        char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel_path, "__file__");
+        char *file_qn = cbm_pipeline_fqn_file(ctx->project_name, rel_path);
         node = cbm_gbuf_find_by_qn(ctx->gbuf, file_qn);
         free(file_qn);
     }

@@ -138,8 +138,8 @@ TEST(fqn_index_symbols_get_clean_qn) {
 }
 
 TEST(fqn_init_file_node_distinct) {
-    /* File node QN (name="__file__") for __init__.py must be distinct from Folder */
-    char *file_qn = cbm_pipeline_fqn_compute("proj", "pkg/__init__.py", "__file__");
+    /* File node QN for __init__.py must be distinct from Folder */
+    char *file_qn = cbm_pipeline_fqn_file("proj", "pkg/__init__.py");
     char *folder_qn = cbm_pipeline_fqn_folder("proj", "pkg");
     ASSERT_NOT_NULL(file_qn);
     ASSERT_NOT_NULL(folder_qn);

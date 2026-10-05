@@ -1630,7 +1630,7 @@ CBMHashTable *cbm_pipeline_namespace_map_build(const char *project_name,
                 return NULL;
             }
         }
-        char *file_qn = cbm_pipeline_fqn_compute(project_name, rels[i], "__file__");
+        char *file_qn = cbm_pipeline_fqn_file(project_name, rels[i]);
         if (!file_qn) {
             continue;
         }

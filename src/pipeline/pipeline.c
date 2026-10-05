@@ -372,6 +372,31 @@ static void free_seen_dir_key(const char *key, void *val, void *ud) {
 
 /* ── Pass 1: Structure ──────────────────────────────────────────── */
 
+char *cbm_pipeline_upsert_file_node(cbm_gbuf_t *gb, const char *project, const char *rel) {
+    char *file_qn = cbm_pipeline_fqn_file(project, rel);
+    if (!file_qn) {
+        return NULL;
+    }
+    const char *slash = strrchr(rel, '/');
+    const char *basename = slash ? slash + SKIP_ONE : rel;
+
+    char props[CBM_SZ_256];
+    const char *ext = strrchr(basename, '.');
+    snprintf(props, sizeof(props), "{\"extension\":\"%s\"}", ext ? ext : "");
+
+    /* The File QN scheme is not fully injective ("a.b" and "a/b" both map to
+     * proj.a.b.__file__), and the UNIQUE QN keeps only one of them. Say so
+     * instead of dropping the other file silently. */
+    const cbm_gbuf_node_t *existing = cbm_gbuf_find_by_qn(gb, file_qn);
+    if (existing && existing->file_path && strcmp(existing->file_path, rel) != 0) {
+        cbm_log_warn("pipeline.file_qn_collision", "qn", file_qn, "existing", existing->file_path,
+                     "incoming", rel);
+    }
+
+    cbm_gbuf_upsert_node(gb, "File", basename, file_qn, rel, 0, 0, props);
+    return file_qn;
+}
+
 /* Create Project, Folder/Package, and File nodes in the graph buffer. */
 /* Walk directory chain upward, creating Folder nodes and CONTAINS_FOLDER edges. */
 static void create_folder_chain(cbm_pipeline_t *p, const char *dir, CBMHashTable *seen_dirs) {
@@ -449,18 +474,10 @@ static int pass_structure(cbm_pipeline_t *p, const cbm_file_info_t *files, int f
         }
 
         /* Create File node */
-        char *file_qn = cbm_pipeline_fqn_compute(p->project_name, rel, "__file__");
-        /* Extract basename */
-        const char *slash = strrchr(rel, '/');
-        const char *basename = slash ? slash + SKIP_ONE : rel;
-
-        char props[CBM_SZ_256];
-        const char *ext = strrchr(basename, '.');
-        snprintf(props, sizeof(props), "{\"extension\":\"%s\"}", ext ? ext : "");
-
-        const char *qualified_name = file_qn;
-        const char *file_path = rel;
-        cbm_gbuf_upsert_node(p->gbuf, "File", basename, qualified_name, file_path, 0, 0, props);
+        char *file_qn = cbm_pipeline_upsert_file_node(p->gbuf, p->project_name, rel);
+        if (!file_qn) {
+            continue;
+        }
 
         /* CONTAINS_FILE edge: parent dir -> file */
         char *dir = strdup(rel);
@@ -949,6 +966,41 @@ static int run_parallel_pipeline(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
     return check_cancel(p) ? CBM_NOT_FOUND : 0;
 }
 
+/* True when the stored index was built with the legacy File-QN scheme, which
+ * stripped the extension and the __init__/index stem. An incremental run on
+ * such an index would add new-scheme File nodes next to the stale ones, so it
+ * must be rebuilt in full. Probes the first stored file whose QN differs
+ * between the two schemes: a current index has a node under the new QN. When
+ * no stored file differs, both schemes agree and the index is usable as-is. */
+static bool file_qn_scheme_stale(cbm_store_t *s, const char *project,
+                                 const cbm_file_hash_t *hashes, int hash_count) {
+    for (int i = 0; i < hash_count; i++) {
+        const char *rel = hashes[i].rel_path;
+        if (!rel) {
+            continue;
+        }
+        char *new_qn = cbm_pipeline_fqn_file(project, rel);
+        /* Legacy scheme, reproduced on purpose for the probe only. */
+        char *old_qn = cbm_pipeline_fqn_compute(project, rel, "__file__");
+        bool differs = new_qn && old_qn && strcmp(new_qn, old_qn) != 0;
+        bool stale = false;
+        if (differs) {
+            /* The node must be this file's: a legacy index can hold another
+             * file under the same string ("a.b" new == "a/b.c" legacy). */
+            cbm_node_t node = {0};
+            stale = cbm_store_find_node_by_qn(s, project, new_qn, &node) != CBM_STORE_OK ||
+                    !node.file_path || strcmp(node.file_path, rel) != 0;
+            cbm_node_free_fields(&node);
+        }
+        free(new_qn);
+        free(old_qn);
+        if (differs) {
+            return stale;
+        }
+    }
+    return false;
+}
+
 /* Try incremental pipeline or delete old DB for reindex.
  * Returns >= 0 if incremental was used (the return code), or -1 to proceed with full. */
 static int try_incremental_or_delete_db(cbm_pipeline_t *p, cbm_file_info_t *files, int file_count) {
@@ -966,16 +1018,19 @@ static int try_incremental_or_delete_db(cbm_pipeline_t *p, cbm_file_info_t *file
         cbm_file_hash_t *hashes = NULL;
         int hash_count = 0;
         cbm_store_get_file_hashes(check_store, p->project_name, &hashes, &hash_count);
+        bool qn_stale = file_qn_scheme_stale(check_store, p->project_name, hashes, hash_count);
         cbm_store_free_file_hashes(hashes, hash_count);
         cbm_store_close(check_store);
-        if (hash_count > 0 && file_count <= hash_count + (hash_count / PAIR_LEN)) {
+        if (qn_stale) {
+            cbm_log_info("pipeline.route", "path", "qn_scheme_reindex", "stored_hashes",
+                         itoa_buf(hash_count));
+        } else if (hash_count > 0 && file_count <= hash_count + (hash_count / PAIR_LEN)) {
             cbm_log_info("pipeline.route", "path", "incremental", "stored_hashes",
                          itoa_buf(hash_count));
             int rc = cbm_pipeline_run_incremental(p, db_path, files, file_count);
             free(db_path);
             return rc;
-        }
-        if (hash_count > 0) {
+        } else if (hash_count > 0) {
             cbm_log_info("pipeline.route", "path", "mode_change_reindex", "stored_hashes",
                          itoa_buf(hash_count), "discovered", itoa_buf(file_count));
         }

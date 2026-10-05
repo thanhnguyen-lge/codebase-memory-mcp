@@ -831,12 +831,7 @@ int cbm_pipeline_run_incremental(cbm_pipeline_t *p, const char *db_path, cbm_fil
     };
 
     for (int i = 0; i < ci; i++) {
-        char *file_qn = cbm_pipeline_fqn_compute(project, changed_files[i].rel_path, "__file__");
-        if (file_qn) {
-            cbm_gbuf_upsert_node(existing, "File", changed_files[i].rel_path, file_qn,
-                                 changed_files[i].rel_path, 0, 0, "{}");
-            free(file_qn);
-        }
+        free(cbm_pipeline_upsert_file_node(existing, project, changed_files[i].rel_path));
     }
 
     run_extract_resolve(&ctx, changed_files, ci);

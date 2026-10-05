@@ -339,7 +339,7 @@ static void process_def(cbm_pipeline_ctx_t *ctx, const CBMDefinition *def, const
          strcmp(def->label, "Field") == 0)) {
         cbm_registry_add(ctx->registry, def->name, def->qualified_name, def->label);
     }
-    char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel, "__file__");
+    char *file_qn = cbm_pipeline_fqn_file(ctx->project_name, rel);
     const cbm_gbuf_node_t *file_node = cbm_gbuf_find_by_qn(ctx->gbuf, file_qn);
     if (file_node && node_id > 0) {
         cbm_gbuf_insert_edge(ctx->gbuf, file_node->id, node_id, "DEFINES", "{}");
@@ -363,7 +363,7 @@ static const cbm_gbuf_node_t *find_channel_source(cbm_pipeline_ctx_t *ctx, const
         node = cbm_gbuf_find_by_qn(ctx->gbuf, ch->enclosing_func_qn);
     }
     if (!node) {
-        char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel, "__file__");
+        char *file_qn = cbm_pipeline_fqn_file(ctx->project_name, rel);
         node = cbm_gbuf_find_by_qn(ctx->gbuf, file_qn);
         free(file_qn);
     }
@@ -428,7 +428,7 @@ static int create_env_configures_for_file(cbm_pipeline_ctx_t *ctx, const CBMFile
         }
         if (!src) {
             if (!file_qn) {
-                file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel, "__file__");
+                file_qn = cbm_pipeline_fqn_file(ctx->project_name, rel);
                 file_node = cbm_gbuf_find_by_qn(ctx->gbuf, file_qn);
             }
             src = file_node;
@@ -448,7 +448,7 @@ static int create_env_configures_for_file(cbm_pipeline_ctx_t *ctx, const CBMFile
 static int create_import_edges_for_file(cbm_pipeline_ctx_t *ctx, const CBMFileResult *result,
                                         const char *rel, CBMHashTable *namespace_map) {
     int count = 0;
-    char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel, "__file__");
+    char *file_qn = cbm_pipeline_fqn_file(ctx->project_name, rel);
     const cbm_gbuf_node_t *source_node = cbm_gbuf_find_by_qn(ctx->gbuf, file_qn);
     if (!source_node) {
         free(file_qn);

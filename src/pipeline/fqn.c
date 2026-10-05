@@ -138,6 +138,29 @@ char *cbm_pipeline_fqn_module(const char *project, const char *rel_path) {
     return cbm_pipeline_fqn_compute(project, rel_path, NULL);
 }
 
+char *cbm_pipeline_fqn_file(const char *project, const char *rel_path) {
+    if (!project) {
+        return strdup("");
+    }
+
+    /* A File node names a concrete file, so unlike the symbol scheme above it
+     * keeps the extension and the __init__/index stem: a.conf and a.time, or
+     * index.ts and index.js, are distinct files and must not share a QN (the
+     * UNIQUE QN would silently keep one and drop the rest). */
+    char *path = strdup(rel_path ? rel_path : "");
+    cbm_normalize_path_sep(path);
+
+    const char *segments[CBM_SZ_256];
+    int seg_count = 0;
+    segments[seg_count++] = project;
+    seg_count += tokenize_path(path, segments + seg_count, FQN_MAX_PATH_SEGS);
+    segments[seg_count++] = "__file__";
+
+    char *result = join_segments(segments, seg_count);
+    free(path);
+    return result;
+}
+
 char *cbm_pipeline_fqn_module_dir(const char *project, const char *rel_path, bool module_is_dir) {
     if (!module_is_dir) {
         /* Filename-stem module (default for all but Java/Go). */
