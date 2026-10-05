@@ -178,7 +178,9 @@ static const char *empty_types[] = {NULL};
 // ==================== DSL ====================
 static const char *dsl_func_types[] = {"function_declaration", NULL};
 static const char *dsl_call_types[] = {"call_function", NULL};
-static const char *dsl_module_types[] = {"include", "run", NULL};
+static const char *dsl_module_types[] = {"program", NULL};
+static const char *dsl_import_types[] = {"include", "run", NULL};
+static const char *dsl_var_types[] = {"assignment_expression", NULL};
 static const char *dsl_branch_types[] = {"if_statement", "for_statement", "while_statement",
                                          "do_statement", NULL};
 static const char *dsl_assign_types[] = {"assignment_expression", NULL};
@@ -2741,9 +2743,9 @@ static const CBMLangSpec lang_specs[CBM_LANG_COUNT] = {
                         NULL, empty_types, NULL, NULL, tree_sitter_plsql, NULL},
     // CBM_LANG_DSL — Domain-Specific Language (.scr, .conf, .time, .tbl)
     [CBM_LANG_DSL] = {CBM_LANG_DSL, dsl_func_types, empty_types, empty_types, dsl_module_types,
-                      dsl_call_types, empty_types, empty_types, dsl_branch_types, empty_types,
-                      dsl_assign_types, empty_types, NULL, empty_types, NULL, NULL, tree_sitter_dsl,
-                      NULL},
+                      dsl_call_types, dsl_import_types, empty_types, dsl_branch_types,
+                      dsl_var_types, dsl_assign_types, empty_types, NULL, empty_types, NULL, NULL,
+                      tree_sitter_dsl, NULL},
 
 };
 

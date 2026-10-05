@@ -47,13 +47,6 @@ uint64_t cbm_pipeline_lsp_reference_lookup_test_rows_examined(void) {
 }
 #endif
 
-/* True for languages whose module QN derives from the CONTAINING DIRECTORY
- * (Java/Go package). MUST match cbm_lang_module_is_dir() (internal/cbm/helpers.c)
- * so same-module resolution keys against the directory-based def-node QNs. */
-static bool pu_module_is_dir(CBMLanguage lang) {
-    return lang == CBM_LANG_JAVA || lang == CBM_LANG_GO;
-}
-
 /* Read file into heap buffer. Caller must free(). */
 static char *read_file(const char *path, int *out_len) {
     FILE *f = cbm_fopen(path, "rb");
@@ -374,8 +367,7 @@ int cbm_pipeline_pass_usages(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *fil
         int imp_count = 0;
         build_import_map(ctx, rel, result, &imp_keys, &imp_vals, &imp_count, files[i].language);
 
-        char *module_qn = cbm_pipeline_fqn_module_dir(ctx->project_name, rel,
-                                                      pu_module_is_dir(files[i].language));
+        char *module_qn = cbm_pipeline_fqn_module_lang(ctx->project_name, rel, files[i].language);
 
         usage_resolved += resolve_usage_edges(ctx, result, rel, module_qn, imp_keys, imp_vals,
                                               imp_count, files[i].language);

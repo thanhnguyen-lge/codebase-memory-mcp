@@ -1790,6 +1790,12 @@ const cbm_gbuf_node_t *cbm_pipeline_resolve_import_node(const cbm_pipeline_ctx_t
         return NULL;
     }
 
+    /* DSL INCLUDE()/RUN(): layer-prefixed script paths, resolved only to the
+     * included file's extension-keeping Module (never a guessed fallback). */
+    if (cbm_pipeline_is_dsl_source(ctx->gbuf, ctx->project_name, source_rel)) {
+        return cbm_pipeline_resolve_dsl_include(ctx, source_rel, imp->module_path);
+    }
+
     /* Prefer exact header-file nodes for C/C++ includes so same-stem source or
      * module nodes do not steal the edge target. */
     const cbm_gbuf_node_t *header_target =

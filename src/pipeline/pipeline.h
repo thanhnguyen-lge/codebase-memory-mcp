@@ -184,6 +184,10 @@ char *cbm_pipeline_fqn_file(const char *project, const char *rel_path);
  * it is exactly cbm_pipeline_fqn_module(). Caller must free(). */
 char *cbm_pipeline_fqn_module_dir(const char *project, const char *rel_path, bool module_is_dir);
 
+/* Module QN that keeps the full file name: proj.dir.main_wash.conf. Used for
+ * languages where cbm_lang_module_keeps_ext() holds (DSL). Caller must free(). */
+char *cbm_pipeline_fqn_module_keep_ext(const char *project, const char *rel_path);
+
 /* Folder QN: project.dir.parts. Caller must free(). */
 char *cbm_pipeline_fqn_folder(const char *project, const char *rel_dir);
 
@@ -253,6 +257,11 @@ void cbm_registry_reach_cache_end(void);
  * cache lifetime. Invalidate between files via _end. */
 void cbm_registry_import_map_cache_begin(const char **keys, const char **vals, int count);
 void cbm_registry_import_map_cache_end(void);
+
+/* Per-file (thread-local) switch: resolve bare callees against the import
+ * values as textually included modules (DSL INCLUDE). */
+void cbm_registry_include_scope_begin(bool enabled);
+void cbm_registry_include_scope_end(void);
 
 /* Per-file full-result cache for cbm_registry_resolve. The same
  * callee_name appears in many call sites within a file; module_qn

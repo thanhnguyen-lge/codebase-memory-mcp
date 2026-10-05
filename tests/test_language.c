@@ -623,6 +623,41 @@ TEST(lang_m_default_on_read_fail) {
     PASS();
 }
 
+/* ── .conf disambiguation (DSL vs INI) ─────────────────────────── */
+
+static CBMLanguage conf_lang_of(const char *name, const char *content) {
+    char path[256];
+    snprintf(path, sizeof(path), "%s/%s", cbm_tmpdir(), name);
+    FILE *f = fopen(path, "w");
+    if (!f) {
+        return CBM_LANG_COUNT;
+    }
+    fputs(content, f);
+    fclose(f);
+    CBMLanguage lang = cbm_disambiguate_conf(path);
+    remove(path);
+    return lang;
+}
+
+/* Data-only DSL .conf files (tables, constants) carry no function/include/call
+ * marker; they used to fall through to INI, turning array rows into Classes. */
+TEST(lang_conf_dsl_data_only) {
+    ASSERT_EQ(conf_lang_of("t_motor.conf", "[\n    [1, [[1_TUMBLE, 220, 40, 0xFF]]]\n]\n"),
+              CBM_LANG_DSL);
+    ASSERT_EQ(conf_lang_of("t_vars.conf", "$pause_t = 10000_MSEC;\n"), CBM_LANG_DSL);
+    ASSERT_EQ(conf_lang_of("t_native.conf", "@HOT_VALVE_TYPE = 1_WS_NOR;\n"), CBM_LANG_DSL);
+    ASSERT_EQ(conf_lang_of("t_comment.conf", "// table\nX = 1\n"), CBM_LANG_DSL);
+    PASS();
+}
+
+TEST(lang_conf_ini_stays_ini) {
+    ASSERT_EQ(conf_lang_of("t_ini.conf", "[server]\nhost = localhost\nport = 80\n"),
+              CBM_LANG_INI);
+    ASSERT_EQ(conf_lang_of("t_kconfig.conf", "# kernel\nCONFIG_FOO=y\nCONFIG_BAR=m\n"),
+              CBM_LANG_INI);
+    PASS();
+}
+
 /* ── .cfc disambiguation (tag vs script dialect) ───────────────── */
 
 /* Helper: write content to a temp .cfc and return its disambiguated language. */
@@ -1405,6 +1440,8 @@ SUITE(language) {
     RUN_TEST(lang_name_unknown);
 
     /* .m disambiguation */
+    RUN_TEST(lang_conf_dsl_data_only);
+    RUN_TEST(lang_conf_ini_stays_ini);
     RUN_TEST(lang_m_objc);
     RUN_TEST(lang_m_magma);
     RUN_TEST(lang_m_matlab);

@@ -3733,6 +3733,83 @@ TEST(ini_comments) {
     PASS();
 }
 
+/* --- DSL (INCLUDE/RUN imports, globals, extension-keeping QNs) --- */
+
+static const char *dsl_def_qn(CBMFileResult *r, const char *label, const char *name) {
+    for (int i = 0; i < r->defs.count; i++) {
+        if (strcmp(r->defs.items[i].label, label) == 0 &&
+            strcmp(r->defs.items[i].name, name) == 0) {
+            return r->defs.items[i].qualified_name;
+        }
+    }
+    return NULL;
+}
+
+TEST(dsl_include_and_run_imports_at_any_depth) {
+    CBMFileResult *r = extract("INCLUDE('common/conf/a.conf');\n"
+                               "if (@X == 1) {\n"
+                               "    INCLUDE('reference/rinse/b.tbl');\n"
+                               "}\n"
+                               "@T = RUN('reference/rinse/c.time');\n"
+                               "INCLUDE(FORMAT_STR('{}.conf', $p));\n",
+                               CBM_LANG_DSL, "t", "course/rinse/rinsing.conf");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    ASSERT(has_import(r, "common/conf/a.conf"));
+    ASSERT(has_import(r, "reference/rinse/b.tbl"));
+    ASSERT(has_import(r, "reference/rinse/c.time"));
+    /* A computed path is not statically known: no import for it. */
+    ASSERT_EQ(r->imports.count, 3);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(dsl_globals_are_variables_but_not_function_locals) {
+    CBMFileResult *r = extract("$a = 1;\n"
+                               "$a = 2;\n"
+                               "@NATIVE = [1, 2];\n"
+                               "if (@X) {\n"
+                               "    $in_block = 3;\n"
+                               "}\n"
+                               "#fn {\n"
+                               "    $local = 4;\n"
+                               "}\n",
+                               CBM_LANG_DSL, "t", "course/wash/main_wash.conf");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    ASSERT(has_def(r, "Variable", "$a"));
+    ASSERT(has_def(r, "Variable", "@NATIVE"));
+    ASSERT(has_def(r, "Variable", "$in_block"));
+    ASSERT_FALSE(has_def(r, "Variable", "$local"));
+    /* One Variable per name per file. */
+    ASSERT_EQ(count_defs_with_label(r, "Variable"), 3);
+    ASSERT_EQ(count_defs_with_label(r, "Class"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* main_wash.conf and main_wash.time (and a sibling main_wash/ folder) must not
+ * share a Module/symbol QN: the DSL module keeps the file extension. */
+TEST(dsl_qualified_names_keep_extension) {
+    CBMFileResult *r = extract("#fn {\n    !helper;\n}\n", CBM_LANG_DSL, "t",
+                               "course/wash/main_wash.time");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    ASSERT_STR_EQ(r->module_qn, "t.course.wash.main_wash.time");
+    ASSERT_STR_EQ(dsl_def_qn(r, "Function", "fn"), "t.course.wash.main_wash.time.fn");
+    /* The call inside #fn is sourced to the function, not the module. */
+    int found = 0;
+    for (int i = 0; i < r->calls.count; i++) {
+        if (strcmp(r->calls.items[i].callee_name, "helper") == 0) {
+            ASSERT_STR_EQ(r->calls.items[i].enclosing_func_qn, "t.course.wash.main_wash.time.fn");
+            found = 1;
+        }
+    }
+    ASSERT(found);
+    cbm_free_result(r);
+    PASS();
+}
+
 /* --- JSON (5 tests) --- */
 
 TEST(json_basic_pair) {
@@ -7791,6 +7868,9 @@ SUITE(extraction) {
     RUN_TEST(toml_empty_table);
     RUN_TEST(toml_comments_only);
     RUN_TEST(toml_boolean_and_integer_values);
+    RUN_TEST(dsl_include_and_run_imports_at_any_depth);
+    RUN_TEST(dsl_globals_are_variables_but_not_function_locals);
+    RUN_TEST(dsl_qualified_names_keep_extension);
     RUN_TEST(ini_basic_section_and_setting);
     RUN_TEST(ini_multiple_sections);
     RUN_TEST(ini_global_keys);

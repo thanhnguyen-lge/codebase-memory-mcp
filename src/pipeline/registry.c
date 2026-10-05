@@ -62,6 +62,8 @@ const char *cbm_confidence_band(double score) {
 #define CONF_SAME_MODULE 0.90
 /* Strategy 3: unique_name — only one candidate project-wide */
 #define CONF_UNIQUE_NAME 0.75
+/* Bare name defined directly in a textually included module. */
+#define CONF_INCLUDE_SCOPE 0.90
 /* Strategy 4: suffix_match — multiple candidates, filtered */
 #define CONF_SUFFIX_MATCH 0.55
 /* Fuzzy fallback: lower confidence */
@@ -257,6 +259,23 @@ void cbm_registry_import_map_cache_end(void) {
     /* Keys/values borrowed from caller — no free callback needed. */
     cbm_ht_free(_import_map_cache);
     _import_map_cache = NULL;
+}
+
+/* ── Per-file include scope ───────────────────────────────────────
+ *
+ * For languages whose include is TEXTUAL (DSL INCLUDE()), every name an
+ * included file defines is in scope of the includer, so a bare callee is
+ * resolved against the included modules directly ("include_scope") instead of
+ * a project-wide name lookup. Off by default; the caller turns it on per file,
+ * with the import values listing the reachable modules nearest-first. */
+static CBM_TLS bool _include_scope = false;
+
+void cbm_registry_include_scope_begin(bool enabled) {
+    _include_scope = enabled;
+}
+
+void cbm_registry_include_scope_end(void) {
+    _include_scope = false;
 }
 
 /* ── Per-file full-result cache for cbm_registry_resolve ──────────
@@ -838,6 +857,26 @@ static cbm_resolution_t resolve_same_module(const cbm_registry_t *r, const char 
     return empty_result();
 }
 
+/* Strategy 2b: include scope (see cbm_registry_include_scope_begin). The
+ * first included module, in the caller's nearest-first order, that defines
+ * the name wins. */
+static cbm_resolution_t resolve_include_scope(const cbm_registry_t *r, const char *callee_name,
+                                              const char **import_vals, int import_count) {
+    char candidate[CBM_SZ_512];
+    for (int i = 0; i < import_count; i++) {
+        if (!import_vals[i]) {
+            continue;
+        }
+        snprintf(candidate, sizeof(candidate), "%s.%s", import_vals[i], callee_name);
+        const char *stored_key = cbm_ht_get_key(r->exact, candidate);
+        if (stored_key) {
+            return (cbm_resolution_t){stored_key, "include_scope", CONF_INCLUDE_SCOPE,
+                                      REG_RESOLVED};
+        }
+    }
+    return empty_result();
+}
+
 /* Strategy 4: multiple candidates with import filtering. */
 static cbm_resolution_t resolve_multi_with_imports(const qn_array_t *arr, const char *module_qn,
                                                    const char **import_vals, int import_count) {
@@ -1095,6 +1134,10 @@ static cbm_resolution_t registry_resolve_chain(const cbm_registry_t *r, const ch
     if (!(res.qualified_name && res.qualified_name[0])) {
         /* Strategy 2: same module */
         res = resolve_same_module(r, callee_name, suffix, module_qn);
+    }
+    if (!(res.qualified_name && res.qualified_name[0]) && _include_scope && !suffix) {
+        /* Strategy 2b: bare name defined in an included module */
+        res = resolve_include_scope(r, callee_name, import_map_vals, import_map_count);
     }
     if (!(res.qualified_name && res.qualified_name[0])) {
         /* Strategy 3+4: name lookup */

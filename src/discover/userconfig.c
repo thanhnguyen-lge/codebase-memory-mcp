@@ -139,6 +139,7 @@ static const lang_name_entry_t LANG_NAME_TABLE[] = {
     {"meson", CBM_LANG_MESON},
     {"glsl", CBM_LANG_GLSL},
     {"ini", CBM_LANG_INI},
+    {"dsl", CBM_LANG_DSL},
     {"matlab", CBM_LANG_MATLAB},
     {"mojo", CBM_LANG_MOJO},
     {"plsql", CBM_LANG_PLSQL},

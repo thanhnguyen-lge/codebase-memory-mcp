@@ -1715,6 +1715,48 @@ static int capture_existing_adr(cbm_pipeline_t *p, const char *db_path) {
     return 0;
 }
 
+/* True when the stored index still holds DSL Modules under the legacy
+ * stem-only QN (main_wash.conf and main_wash.time shared "proj.dir.main_wash").
+ * DSL Modules now keep the extension, so an incremental run would leave the
+ * merged legacy Module beside the new per-file ones. Positive evidence only: a
+ * legacy-QN Module whose file_path is the probed file. Probes a few DSL files
+ * (an empty file has no Module under either scheme). */
+static bool dsl_module_scheme_stale(cbm_store_t *s, const char *project,
+                                    const cbm_file_info_t *files, int file_count) {
+    enum { DSL_PROBE_MAX = 16 };
+    int probed = 0;
+    for (int i = 0; i < file_count && probed < DSL_PROBE_MAX; i++) {
+        if (files[i].language != CBM_LANG_DSL || !files[i].rel_path) {
+            continue;
+        }
+        const char *rel = files[i].rel_path;
+        char *new_qn = cbm_pipeline_fqn_module_keep_ext(project, rel);
+        cbm_node_t node = {0};
+        bool current = new_qn &&
+                       cbm_store_find_node_by_qn(s, project, new_qn, &node) == CBM_STORE_OK &&
+                       node.file_path && strcmp(node.file_path, rel) == 0;
+        cbm_node_free_fields(&node);
+        free(new_qn);
+        if (current) {
+            return false;
+        }
+        /* Legacy scheme, reproduced on purpose for the probe only. */
+        char *old_qn = cbm_pipeline_fqn_module(project, rel);
+        cbm_node_t old = {0};
+        bool legacy = old_qn &&
+                      cbm_store_find_node_by_qn(s, project, old_qn, &old) == CBM_STORE_OK &&
+                      old.label && strcmp(old.label, "Module") == 0 && old.file_path &&
+                      strcmp(old.file_path, rel) == 0;
+        cbm_node_free_fields(&old);
+        free(old_qn);
+        if (legacy) {
+            return true;
+        }
+        probed++;
+    }
+    return false;
+}
+
 /* Route an existing generation. Full rebuilds never delete the live DB here:
  * publication owns the eventual atomic replacement after every pass and
  * metadata write has succeeded. */
@@ -1761,6 +1803,24 @@ static int try_incremental_or_delete_db(cbm_pipeline_t *p, cbm_file_info_t *file
         cbm_log_info("pipeline.route", "path", "format_change_reindex", "stored_format",
                      itoa_buf(fmt));
         p->format_migration = true;
+        int adr_rc = capture_existing_adr(p, db_path);
+        (void)cbm_unlink(db_path);
+        (void)cbm_remove_db_sidecars(db_path);
+        free(db_path);
+        return adr_rc != 0 ? adr_rc : CBM_PIPELINE_FORCE_FULL_REINDEX;
+    }
+
+    /* Same format, but DSL Modules may still carry the stem-only QN (an index
+     * built before DSL support, where .conf files were INI). Their hashes are
+     * unchanged, so an incremental run would never re-extract them. */
+    cbm_store_t *dsl_store = cbm_store_open_path_query(db_path);
+    bool dsl_stale =
+        dsl_store && dsl_module_scheme_stale(dsl_store, p->project_name, files, file_count);
+    if (dsl_store) {
+        cbm_store_close(dsl_store);
+    }
+    if (dsl_stale) {
+        cbm_log_info("pipeline.route", "path", "dsl_qn_scheme_reindex");
         int adr_rc = capture_existing_adr(p, db_path);
         (void)cbm_unlink(db_path);
         (void)cbm_remove_db_sidecars(db_path);

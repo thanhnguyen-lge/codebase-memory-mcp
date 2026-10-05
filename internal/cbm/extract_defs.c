@@ -6513,6 +6513,45 @@ static void extract_yaml_toplevel_keys(CBMExtractCtx *ctx, TSNode root) {
     }
 }
 
+// DSL: a `$var = ...` / `@VAR = ...` assignment outside any `#func { }` body
+// defines a script-global (INCLUDE is textual, so these are what includers
+// see). Assignments may sit inside top-level if/while blocks, so walk the tree
+// but skip function bodies. One Variable per name per file, at its first
+// assignment.
+static void extract_dsl_variables(CBMExtractCtx *ctx, TSNode root) {
+    CBMArena *a = ctx->arena;
+    int first_def = ctx->result->defs.count;
+    TSNodeStack stack;
+    ts_nstack_init(&stack, ctx, CBM_SZ_256);
+    ts_nstack_push(&stack, root);
+    while (stack.count > 0) {
+        TSNode node = ts_nstack_pop(&stack);
+        const char *kind = ts_node_type(node);
+        if (strcmp(kind, "function_declaration") == 0) {
+            continue;
+        }
+        if (strcmp(kind, "assignment_expression") == 0) {
+            TSNode left = ts_node_child_by_field_name(node, TS_FIELD("left"));
+            const char *lk = ts_node_is_null(left) ? "" : ts_node_type(left);
+            if (strcmp(lk, "access_variable") == 0 || strcmp(lk, "access_native") == 0) {
+                char *name = cbm_node_text(a, left, ctx->source);
+                bool seen = false;
+                for (int i = first_def; name && i < ctx->result->defs.count; i++) {
+                    if (strcmp(ctx->result->defs.items[i].name, name) == 0) {
+                        seen = true;
+                        break;
+                    }
+                }
+                if (!seen) {
+                    push_var_def(ctx, name, node);
+                }
+            }
+        }
+        /* Children pop in source order so the first assignment is seen first. */
+        ts_nstack_push_children(&stack, node);
+    }
+}
+
 static void extract_variables(CBMExtractCtx *ctx, TSNode root, const CBMLangSpec *spec) {
     if (!spec->variable_node_types || !spec->variable_node_types[0]) {
         return;
@@ -6521,6 +6560,11 @@ static void extract_variables(CBMExtractCtx *ctx, TSNode root, const CBMLangSpec
     // Helm values.yaml: only top-level keys, not the per-leaf flood.
     if (ctx->language == CBM_LANG_YAML && is_helm_values_file(ctx->rel_path)) {
         extract_yaml_toplevel_keys(ctx, root);
+        return;
+    }
+
+    if (ctx->language == CBM_LANG_DSL) {
+        extract_dsl_variables(ctx, root);
         return;
     }
 
