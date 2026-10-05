@@ -27,14 +27,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* True for languages whose module QN derives from the CONTAINING DIRECTORY
- * (Java/Go package). MUST match cbm_lang_module_is_dir() (internal/cbm/helpers.c)
- * so base-class / same-module resolution keys against the directory-based
- * def-node QNs. */
-static bool ps_module_is_dir(CBMLanguage lang) {
-    return lang == CBM_LANG_JAVA || lang == CBM_LANG_GO;
-}
-
 static char *read_file(const char *path, int *out_len) {
     FILE *f = cbm_fopen(path, "rb");
     if (!f) {
@@ -552,8 +544,7 @@ int cbm_pipeline_pass_semantic(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *f
         int imp_count = 0;
         build_import_map(ctx, rel, result, &imp_keys, &imp_vals, &imp_count);
 
-        char *module_qn = cbm_pipeline_fqn_module_dir(ctx->project_name, rel,
-                                                      ps_module_is_dir(files[i].language));
+        char *module_qn = cbm_pipeline_fqn_module_lang(ctx->project_name, rel, files[i].language);
 
         /* ── INHERITS + DECORATES from definitions ──────────────── */
         for (int d = 0; d < result->defs.count; d++) {

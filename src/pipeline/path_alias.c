@@ -165,6 +165,68 @@ static int cmp_scope_by_specificity(const void *a, const void *b) {
     return 0;
 }
 
+/* Append the entries of a tsconfig-shaped `paths` object
+ * ({"alias/<star>": ["target/<star>"]}; a bare string target is accepted too) to map,
+ * targets resolved relative to dir_prefix, then re-sort by specificity. `src`
+ * names the config file in cap-hit logs. Returns false on allocation failure. */
+static bool parse_paths_obj(cbm_path_alias_map_t *map, yyjson_val *paths_obj,
+                            const char *dir_prefix, const char *src) {
+    size_t obj_size = yyjson_obj_size(paths_obj);
+    bool capped = (size_t)map->count + obj_size > CBM_PATH_ALIAS_MAX_ENTRIES;
+    int capacity = capped ? CBM_PATH_ALIAS_MAX_ENTRIES : map->count + (int)obj_size;
+    if (capacity <= map->count) {
+        return true;
+    }
+    cbm_path_alias_t *grown = realloc(map->entries, (size_t)capacity * sizeof(cbm_path_alias_t));
+    if (!grown) {
+        return false;
+    }
+    map->entries = grown;
+    yyjson_val *key;
+    yyjson_obj_iter iter = yyjson_obj_iter_with(paths_obj);
+    while ((key = yyjson_obj_iter_next(&iter)) != NULL && map->count < capacity) {
+        yyjson_val *val = yyjson_obj_iter_get_val(key);
+        const char *alias_pattern = yyjson_get_str(key);
+        const char *target_pattern = NULL;
+        if (yyjson_is_str(val)) {
+            target_pattern = yyjson_get_str(val);
+        } else if (yyjson_is_arr(val) && yyjson_arr_size(val) > 0) {
+            target_pattern = yyjson_get_str(yyjson_arr_get_first(val));
+        }
+        if (!alias_pattern || !target_pattern) {
+            continue;
+        }
+        cbm_path_alias_t *entry = &map->entries[map->count];
+        const char *star = strchr(alias_pattern, '*');
+        if (star) {
+            entry->has_wildcard = true;
+            entry->alias_prefix = cbm_strndup(alias_pattern, (size_t)(star - alias_pattern));
+            entry->alias_suffix = strdup(star + 1);
+        } else {
+            entry->has_wildcard = false;
+            entry->alias_prefix = strdup(alias_pattern);
+            entry->alias_suffix = strdup("");
+        }
+        const char *tstar = strchr(target_pattern, '*');
+        if (tstar) {
+            char *pre = cbm_strndup(target_pattern, (size_t)(tstar - target_pattern));
+            entry->target_prefix = resolve_target_relative(dir_prefix, pre);
+            free(pre);
+            entry->target_suffix = strdup(tstar + 1);
+        } else {
+            entry->target_prefix = resolve_target_relative(dir_prefix, target_pattern);
+            entry->target_suffix = strdup("");
+        }
+        map->count++;
+    }
+    if (capped) {
+        cbm_log_warn("path_alias.entries.cap_hit", "config", src, "kept", "256_of_more");
+    }
+    qsort(map->entries, (size_t)map->count, sizeof(cbm_path_alias_t),
+          cmp_alias_entry_by_specificity);
+    return true;
+}
+
 /* ── tsconfig.json / jsconfig.json loader ──────────────────────── */
 
 /* Parse compilerOptions.paths and compilerOptions.baseUrl into an alias map.
@@ -225,66 +287,32 @@ static cbm_path_alias_map_t *load_tsconfig_file(const char *abs_path, const char
         map->base_url = strdup(dir_prefix);
     }
 
-    if (paths_obj && yyjson_is_obj(paths_obj)) {
-        size_t obj_size = yyjson_obj_size(paths_obj);
-        bool capped = obj_size > CBM_PATH_ALIAS_MAX_ENTRIES;
-        int capacity = (int)(capped ? (size_t)CBM_PATH_ALIAS_MAX_ENTRIES : obj_size);
-        if (capacity > 0) {
-            map->entries = calloc((size_t)capacity, sizeof(cbm_path_alias_t));
-            if (!map->entries) {
-                free(map->base_url);
-                free(map);
-                yyjson_doc_free(doc);
-                return NULL;
-            }
-            yyjson_val *key;
-            yyjson_obj_iter iter = yyjson_obj_iter_with(paths_obj);
-            while ((key = yyjson_obj_iter_next(&iter)) != NULL && map->count < capacity) {
-                yyjson_val *val = yyjson_obj_iter_get_val(key);
-                const char *alias_pattern = yyjson_get_str(key);
-                if (!alias_pattern || !yyjson_is_arr(val) || yyjson_arr_size(val) == 0) {
-                    continue;
-                }
-                const char *target_pattern = yyjson_get_str(yyjson_arr_get_first(val));
-                if (!target_pattern) {
-                    continue;
-                }
-                cbm_path_alias_t *entry = &map->entries[map->count];
-                const char *star = strchr(alias_pattern, '*');
-                if (star) {
-                    entry->has_wildcard = true;
-                    entry->alias_prefix =
-                        cbm_strndup(alias_pattern, (size_t)(star - alias_pattern));
-                    entry->alias_suffix = strdup(star + 1);
-                } else {
-                    entry->has_wildcard = false;
-                    entry->alias_prefix = strdup(alias_pattern);
-                    entry->alias_suffix = strdup("");
-                }
-                const char *tstar = strchr(target_pattern, '*');
-                if (tstar) {
-                    char *pre = cbm_strndup(target_pattern, (size_t)(tstar - target_pattern));
-                    entry->target_prefix = resolve_target_relative(dir_prefix, pre);
-                    free(pre);
-                    entry->target_suffix = strdup(tstar + 1);
-                } else {
-                    entry->target_prefix = resolve_target_relative(dir_prefix, target_pattern);
-                    entry->target_suffix = strdup("");
-                }
-                map->count++;
-            }
-            if (capped) {
-                cbm_log_warn("path_alias.entries.cap_hit", "config", abs_path, "kept",
-                             /* itoa via thread-local buffer would be tidier; keep simple */
-                             "256_of_more");
-            }
-            qsort(map->entries, (size_t)map->count, sizeof(cbm_path_alias_t),
-                  cmp_alias_entry_by_specificity);
-        }
+    if (paths_obj && yyjson_is_obj(paths_obj) &&
+        !parse_paths_obj(map, paths_obj, dir_prefix, abs_path)) {
+        free(map->entries);
+        free(map->base_url);
+        free(map);
+        yyjson_doc_free(doc);
+        return NULL;
     }
 
     yyjson_doc_free(doc);
     return map;
+}
+
+static void alias_map_free(cbm_path_alias_map_t *map) {
+    if (!map) {
+        return;
+    }
+    for (int j = 0; j < map->count; j++) {
+        free(map->entries[j].alias_prefix);
+        free(map->entries[j].alias_suffix);
+        free(map->entries[j].target_prefix);
+        free(map->entries[j].target_suffix);
+    }
+    free(map->entries);
+    free(map->base_url);
+    free(map);
 }
 
 /* ── Public API ────────────────────────────────────────────────── */
@@ -295,18 +323,7 @@ void cbm_path_alias_collection_free(cbm_path_alias_collection_t *coll) {
     }
     for (int i = 0; i < coll->count; i++) {
         free(coll->scopes[i].dir_prefix);
-        if (coll->scopes[i].map) {
-            cbm_path_alias_map_t *map = coll->scopes[i].map;
-            for (int j = 0; j < map->count; j++) {
-                free(map->entries[j].alias_prefix);
-                free(map->entries[j].alias_suffix);
-                free(map->entries[j].target_prefix);
-                free(map->entries[j].target_suffix);
-            }
-            free(map->entries);
-            free(map->base_url);
-            free(map);
-        }
+        alias_map_free(coll->scopes[i].map);
     }
     free(coll->scopes);
     free(coll);
@@ -434,6 +451,83 @@ static void find_alias_files(const char *abs_dir, const char *rel_dir, alias_con
     cbm_closedir(d);
 }
 
+/* ── Project config loader ─────────────────────────────────────── */
+
+/* Read `path_aliases` from {repo}/.codebase-memory.json: the same shape as
+ * tsconfig's compilerOptions.paths, targets relative to the repo root, e.g.
+ *   {"path_aliases": {"common/<star>": "KR/base_spec/default/<star>"}}  (<star> = *)
+ * Lets languages with deployment-defined include roots (DSL script layers)
+ * map their include prefixes onto repo paths. Appends to `map`; returns the
+ * number of entries added. */
+static int load_project_config_aliases(const char *repo_path, cbm_path_alias_map_t *map) {
+    char path[CBM_SZ_512];
+    snprintf(path, sizeof(path), "%s/.codebase-memory.json", repo_path);
+    FILE *f = cbm_fopen(path, "r");
+    if (!f) {
+        return 0;
+    }
+    char *buf = malloc(CBM_PATH_ALIAS_MAX_FILE_BYTES + 1);
+    if (!buf) {
+        fclose(f);
+        return 0;
+    }
+    size_t nread = fread(buf, 1, CBM_PATH_ALIAS_MAX_FILE_BYTES, f);
+    fclose(f);
+    buf[nread] = '\0';
+
+    yyjson_read_flag flg = YYJSON_READ_ALLOW_COMMENTS | YYJSON_READ_ALLOW_TRAILING_COMMAS;
+    yyjson_doc *doc = yyjson_read(buf, nread, flg);
+    free(buf);
+    if (!doc) {
+        return 0;
+    }
+    int before = map->count;
+    yyjson_val *paths_obj = yyjson_obj_get(yyjson_doc_get_root(doc), "path_aliases");
+    if (paths_obj && yyjson_is_obj(paths_obj)) {
+        (void)parse_paths_obj(map, paths_obj, "", path);
+    }
+    yyjson_doc_free(doc);
+    return map->count - before;
+}
+
+/* Merge the project-config aliases into the repo-root scope (creating it when
+ * no root tsconfig/jsconfig contributed one). */
+static void add_project_config_scope(cbm_path_alias_collection_t *coll, const char *repo_path) {
+    cbm_path_alias_map_t *root_map = NULL;
+    for (int i = 0; i < coll->count; i++) {
+        if (coll->scopes[i].dir_prefix && coll->scopes[i].dir_prefix[0] == '\0') {
+            root_map = coll->scopes[i].map;
+            break;
+        }
+    }
+    if (root_map) {
+        load_project_config_aliases(repo_path, root_map);
+        return;
+    }
+    cbm_path_alias_map_t *map = calloc(1, sizeof(*map));
+    if (!map) {
+        return;
+    }
+    if (load_project_config_aliases(repo_path, map) == 0) {
+        alias_map_free(map);
+        return;
+    }
+    cbm_path_alias_scope_t *grown =
+        realloc(coll->scopes, (size_t)(coll->count + 1) * sizeof(cbm_path_alias_scope_t));
+    if (grown) {
+        coll->scopes = grown;
+    }
+    char *prefix = grown ? strdup("") : NULL;
+    if (!prefix) {
+        alias_map_free(map);
+        return;
+    }
+    coll->scopes = grown;
+    coll->scopes[coll->count].dir_prefix = prefix;
+    coll->scopes[coll->count].map = map;
+    coll->count++;
+}
+
 cbm_path_alias_collection_t *cbm_load_path_aliases_excluded(const char *repo_path,
                                                             char **excluded_dirs,
                                                             int excluded_count) {
@@ -450,21 +544,19 @@ cbm_path_alias_collection_t *cbm_load_path_aliases_excluded(const char *repo_pat
     if (count >= CBM_PATH_ALIAS_MAX_FILES) {
         cbm_log_warn("path_alias.files.cap_hit", "repo", repo_path, "kept", "256_of_more");
     }
-    if (count == 0) {
-        free(hits);
-        return NULL;
-    }
 
     cbm_path_alias_collection_t *coll = calloc(1, sizeof(*coll));
     if (!coll) {
         free(hits);
         return NULL;
     }
-    coll->scopes = calloc((size_t)count, sizeof(cbm_path_alias_scope_t));
-    if (!coll->scopes) {
-        free(coll);
-        free(hits);
-        return NULL;
+    if (count > 0) {
+        coll->scopes = calloc((size_t)count, sizeof(cbm_path_alias_scope_t));
+        if (!coll->scopes) {
+            free(coll);
+            free(hits);
+            return NULL;
+        }
     }
 
     for (int i = 0; i < count; i++) {
@@ -477,6 +569,8 @@ cbm_path_alias_collection_t *cbm_load_path_aliases_excluded(const char *repo_pat
         coll->count++;
     }
     free(hits);
+
+    add_project_config_scope(coll, repo_path);
 
     if (coll->count == 0) {
         free(coll->scopes);

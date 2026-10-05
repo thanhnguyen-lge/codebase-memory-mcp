@@ -72,6 +72,7 @@ static void parse_vhdl_imports(CBMExtractCtx *ctx);
 static void parse_wit_imports(CBMExtractCtx *ctx);
 static void parse_smithy_imports(CBMExtractCtx *ctx);
 static void parse_hyprlang_imports(CBMExtractCtx *ctx);
+static void parse_dsl_imports(CBMExtractCtx *ctx);
 
 // Helper: strip quotes from a string literal
 static char *strip_quotes(CBMArena *a, const char *s) {
@@ -2730,6 +2731,39 @@ static void parse_hyprlang_imports(CBMExtractCtx *ctx) {
     }
 }
 
+// --- DSL imports: INCLUDE('layer/path.conf') / RUN('layer/path.time') ---
+// AST: include|run -> parenthesized_expression -> string. Both may sit at any
+// depth (inside if/else, on the right of an assignment), so walk the whole
+// tree. Only a literal path is emitted; a computed one (FORMAT_STR(...), $var)
+// is unknowable statically. The pipeline maps the runtime layer prefix to a
+// repo path (dsl_include.c).
+static void parse_dsl_imports(CBMExtractCtx *ctx) {
+    CBMArena *a = ctx->arena;
+    TSNodeStack stack;
+    ts_nstack_init(&stack, a, CBM_SZ_512);
+    ts_nstack_push(&stack, a, ctx->root);
+    while (stack.count > 0) {
+        TSNode node = ts_nstack_pop(&stack);
+        const char *kind = ts_node_type(node);
+        if (strcmp(kind, "include") == 0 || strcmp(kind, "run") == 0) {
+            TSNode args = cbm_find_child_by_kind(node, "parenthesized_expression");
+            bool one_arg = !ts_node_is_null(args) && ts_node_named_child_count(args) == SKIP_ONE;
+            TSNode str = one_arg ? ts_node_named_child(args, 0) : args;
+            if (one_arg && strcmp(ts_node_type(str), "string") == 0) {
+                char *path = strip_quotes(a, cbm_node_text(a, str, ctx->source));
+                if (path && path[0]) {
+                    const char *slash = strrchr(path, '/');
+                    CBMImport imp = {.local_name = slash ? slash + SKIP_ONE : path,
+                                     .module_path = path};
+                    cbm_imports_push(&ctx->result->imports, a, imp);
+                }
+            }
+            continue;
+        }
+        ts_nstack_push_children(&stack, a, node);
+    }
+}
+
 // --- Main dispatch ---
 
 void cbm_extract_imports(CBMExtractCtx *ctx) {
@@ -2940,6 +2974,9 @@ void cbm_extract_imports(CBMExtractCtx *ctx) {
         break;
     case CBM_LANG_HYPRLANG:
         parse_hyprlang_imports(ctx);
+        break;
+    case CBM_LANG_DSL:
+        parse_dsl_imports(ctx);
         break;
     /* Host languages whose tree-sitter grammar leaves <script> bodies as raw
      * text — re-parse the embedded slice via the embedded-language spec. */

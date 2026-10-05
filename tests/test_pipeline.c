@@ -546,6 +546,146 @@ TEST(pipeline_file_qn_keeps_extension) {
     PASS();
 }
 
+/* DSL scripts: same-stem siblings (main_wash.conf / main_wash.time) and a file
+ * named after a sibling folder (tumbling.conf / tumbling/) each get their own
+ * Module; a data-only .conf is DSL (no Class rows); INCLUDE() through a
+ * configured layer alias becomes an IMPORTS edge and resolves a bare call to
+ * the included module ("include_scope"), not to a same-name decoy elsewhere. */
+static const char *const k_dsl_files[][2] = {
+    {".codebase-memory.json", "{\"path_aliases\": {\"common/*\": \"base/default/*\"}}\n"},
+    {"base/default/step/rewater.scr", "#cond_rewater {\n    return 1;\n}\n"},
+    {"base/other/step/rewater.scr", "#cond_rewater {\n    return 2;\n}\n"},
+    {"base/course/wash/main_wash.conf",
+     "INCLUDE('common/step/rewater.scr');\n$x = 1;\n!cond_rewater;\n"},
+    {"base/course/wash/main_wash.time", "#t_fn {\n    return 2;\n}\n!t_fn;\n"},
+    {"base/course/wash/tumbling.conf", "$y = 2;\n"},
+    {"base/course/wash/tumbling/motor.conf", "[\n    [1, [[1_TUMBLE, 220, 40, 0xFF]]]\n]\n"},
+};
+enum { DSL_FILE_COUNT = (int)(sizeof(k_dsl_files) / sizeof(k_dsl_files[0])) };
+
+static bool dsl_has_edge(cbm_store_t *s, int64_t src, const char *type, int64_t dst,
+                         const char *props_substr) {
+    cbm_edge_t *edges = NULL;
+    int n = 0;
+    bool hit = false;
+    if (cbm_store_find_edges_by_source_type(s, src, type, &edges, &n) == CBM_STORE_OK) {
+        for (int i = 0; i < n && !hit; i++) {
+            hit = edges[i].target_id == dst &&
+                  (!props_substr ||
+                   (edges[i].properties_json && strstr(edges[i].properties_json, props_substr)));
+        }
+        cbm_store_free_edges(edges, n);
+    }
+    return hit;
+}
+
+TEST(pipeline_dsl_modules_and_includes) {
+    char tmp[256];
+    snprintf(tmp, sizeof(tmp), "/tmp/cbm_dsl_XXXXXX");
+    if (!cbm_mkdtemp(tmp)) {
+        FAIL("failed to create temp dir");
+    }
+    for (int i = 0; i < DSL_FILE_COUNT; i++) {
+        ASSERT_EQ(th_write_file(TH_PATH(tmp, k_dsl_files[i][0]), k_dsl_files[i][1]), 0);
+    }
+    char db_dir[256];
+    snprintf(db_dir, sizeof(db_dir), "/tmp/cbm_dsl_db_XXXXXX");
+    if (!cbm_mkdtemp(db_dir)) {
+        FAIL("failed to create temp dir");
+    }
+    char db_path[512];
+    snprintf(db_path, sizeof(db_path), "%s/test.db", db_dir);
+    cbm_pipeline_t *p = cbm_pipeline_new(tmp, db_path, CBM_MODE_FULL);
+    ASSERT_NOT_NULL(p);
+    ASSERT_EQ(cbm_pipeline_run(p), 0);
+    char project[256];
+    snprintf(project, sizeof(project), "%s", cbm_pipeline_project_name(p));
+    cbm_pipeline_free(p);
+
+    cbm_store_t *s = cbm_store_open_path(db_path);
+    ASSERT_NOT_NULL(s);
+
+    /* One Module per DSL file, under the extension-keeping QN. */
+    int modules_ok = 0;
+    for (int i = 1; i < DSL_FILE_COUNT; i++) {
+        char *qn = cbm_pipeline_fqn_module_keep_ext(project, k_dsl_files[i][0]);
+        cbm_node_t m = {0};
+        if (cbm_store_find_node_by_qn(s, project, qn, &m) == CBM_STORE_OK && m.label &&
+            strcmp(m.label, "Module") == 0 && m.file_path &&
+            strcmp(m.file_path, k_dsl_files[i][0]) == 0) {
+            modules_ok++;
+        } else {
+            printf("  missing DSL Module: %s\n", k_dsl_files[i][0]);
+        }
+        cbm_node_free_fields(&m);
+        free(qn);
+    }
+
+    cbm_node_t *classes = NULL;
+    int nclasses = 0;
+    ASSERT_EQ(cbm_store_find_nodes_by_label(s, project, "Class", &classes, &nclasses),
+              CBM_STORE_OK);
+    cbm_store_free_nodes(classes, nclasses);
+
+    char *conf_file_qn = cbm_pipeline_fqn_file(project, "base/course/wash/main_wash.conf");
+    char *conf_mod_qn =
+        cbm_pipeline_fqn_module_keep_ext(project, "base/course/wash/main_wash.conf");
+    char *inc_mod_qn = cbm_pipeline_fqn_module_keep_ext(project, "base/default/step/rewater.scr");
+    char *target_qn = cbm_pipeline_fqn_module_keep_ext(project, "base/default/step/rewater.scr");
+    char *fn_qn = NULL;
+    if (target_qn) {
+        size_t n = strlen(target_qn) + sizeof(".cond_rewater");
+        fn_qn = malloc(n);
+        snprintf(fn_qn, n, "%s.cond_rewater", target_qn);
+    }
+    cbm_node_t conf_file = {0}, conf_mod = {0}, inc_mod = {0}, fn = {0};
+    ASSERT_EQ(cbm_store_find_node_by_qn(s, project, conf_file_qn, &conf_file), CBM_STORE_OK);
+    ASSERT_EQ(cbm_store_find_node_by_qn(s, project, conf_mod_qn, &conf_mod), CBM_STORE_OK);
+    ASSERT_EQ(cbm_store_find_node_by_qn(s, project, inc_mod_qn, &inc_mod), CBM_STORE_OK);
+    ASSERT_EQ(cbm_store_find_node_by_qn(s, project, fn_qn, &fn), CBM_STORE_OK);
+    bool imports = dsl_has_edge(s, conf_file.id, "IMPORTS", inc_mod.id, NULL);
+    bool calls = dsl_has_edge(s, conf_mod.id, "CALLS", fn.id, "include_scope");
+
+    cbm_node_free_fields(&conf_file);
+    cbm_node_free_fields(&conf_mod);
+    cbm_node_free_fields(&inc_mod);
+    cbm_node_free_fields(&fn);
+    free(conf_file_qn);
+    free(conf_mod_qn);
+    free(inc_mod_qn);
+    free(target_qn);
+    free(fn_qn);
+    cbm_store_close(s);
+    th_rmtree(tmp);
+    th_rmtree(db_dir);
+
+    ASSERT_EQ(modules_ok, DSL_FILE_COUNT - 1);
+    ASSERT_EQ(nclasses, 0);
+    ASSERT_TRUE(imports);
+    ASSERT_TRUE(calls);
+    PASS();
+}
+
+/* A non-DSL file whose extension-keeping QN equals another file's stem-stripped
+ * Module QN (foo/bar.py vs foo/bar/py.py, both proj.foo.bar.py) is not DSL;
+ * otherwise its imports would be routed through DSL INCLUDE resolution. */
+TEST(pipeline_dsl_source_requires_own_module) {
+    cbm_gbuf_t *gb = cbm_gbuf_new("proj", "/tmp/test");
+    ASSERT_NOT_NULL(gb);
+    cbm_gbuf_upsert_node(gb, "Module", "py", "proj.foo.bar.py", "foo/bar/py.py", 0, 0, "{}");
+    cbm_gbuf_upsert_node(gb, "Module", "a.conf", "proj.w.a.conf", "w/a.conf", 0, 0, "{}");
+    /* Extension-less: same QN under both schemes, so its own Module matches. */
+    cbm_gbuf_upsert_node(gb, "Module", "Makefile", "proj.Makefile", "Makefile", 0, 0, "{}");
+    bool py_is_dsl = cbm_pipeline_is_dsl_source(gb, "proj", "foo/bar.py");
+    bool make_is_dsl = cbm_pipeline_is_dsl_source(gb, "proj", "Makefile");
+    bool conf_is_dsl = cbm_pipeline_is_dsl_source(gb, "proj", "w/a.conf");
+    cbm_gbuf_free(gb);
+    ASSERT_FALSE(py_is_dsl);
+    ASSERT_FALSE(make_is_dsl);
+    ASSERT_TRUE(conf_is_dsl);
+    PASS();
+}
+
 /* The incremental path must build File nodes exactly like the full path
  * (basename as name, "extension" property) and keep same-stem files apart. */
 TEST(pipeline_incremental_file_node_matches_full) {
@@ -6926,6 +7066,8 @@ SUITE(pipeline) {
     RUN_TEST(pipeline_structure_edges);
     RUN_TEST(pipeline_branch_root_structure);
     RUN_TEST(pipeline_file_qn_keeps_extension);
+    RUN_TEST(pipeline_dsl_modules_and_includes);
+    RUN_TEST(pipeline_dsl_source_requires_own_module);
     RUN_TEST(pipeline_incremental_file_node_matches_full);
     RUN_TEST(pipeline_legacy_file_qn_forces_full_reindex);
     RUN_TEST(pipeline_project_name_derived);

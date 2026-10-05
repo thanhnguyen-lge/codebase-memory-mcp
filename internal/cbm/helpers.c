@@ -866,6 +866,19 @@ static const char *func_node_name(CBMArena *a, TSNode func_node, const char *sou
         }
     }
 
+    // DSL: `#name { ... }` has no "name" field; the name is the first identifier
+    // child (mirrors resolve_dsl_func_name in extract_defs.c).
+    if (lang == CBM_LANG_DSL && strcmp(ts_node_type(func_node), "function_declaration") == 0) {
+        uint32_t nc = ts_node_named_child_count(func_node);
+        for (uint32_t i = 0; i < nc; i++) {
+            TSNode child = ts_node_named_child(func_node, i);
+            if (strcmp(ts_node_type(child), "identifier") == 0) {
+                return cbm_node_text(a, child, source);
+            }
+        }
+        return NULL;
+    }
+
     TSNode name_node = ts_node_child_by_field_name(func_node, TS_FIELD("name"));
     if (!ts_node_is_null(name_node)) {
         return cbm_node_text(a, name_node, source);
@@ -936,6 +949,9 @@ const char *cbm_enclosing_func_qn(CBMArena *a, TSNode node, CBMLanguage lang, co
         }
     }
 
+    if (cbm_lang_module_keeps_ext(lang)) {
+        return cbm_fqn_compute_source_lang(a, project, rel_path, name, lang);
+    }
     return cbm_fqn_compute(a, project, rel_path, name);
 }
 
@@ -1262,12 +1278,39 @@ char *cbm_fqn_module(CBMArena *a, const char *project, const char *rel_path) {
 // type/method name is appended once — so a class `Outer` in `Outer.java` is
 // `proj.Outer`, not `proj.Outer.Outer`, and a method in `myapp/db/conn.go`
 // belongs to module `proj.myapp.db`, not `proj.myapp.db.conn`.
-static bool cbm_lang_module_is_dir(CBMLanguage lang) {
+bool cbm_lang_module_is_dir(CBMLanguage lang) {
     return lang == CBM_LANG_JAVA || lang == CBM_LANG_GO;
+}
+
+bool cbm_lang_module_keeps_ext(CBMLanguage lang) {
+    return lang == CBM_LANG_DSL;
+}
+
+// Module QN with the full file name kept: project + every path segment as-is.
+static char *fqn_module_keep_ext(CBMArena *a, const char *project, const char *rel_path) {
+    if (!project) {
+        project = "";
+    }
+    if (!rel_path) {
+        rel_path = "";
+    }
+    size_t proj_len = strlen(project);
+    size_t path_len = strlen(rel_path);
+    char *buf = (char *)cbm_arena_alloc(a, proj_len + SKIP_ONE + path_len + SKIP_ONE);
+    if (!buf) {
+        return NULL;
+    }
+    memcpy(buf, project, proj_len);
+    char *out = append_path_segments(buf + proj_len, rel_path, path_len, false);
+    *out = '\0';
+    return buf;
 }
 
 char *cbm_fqn_module_source_lang(CBMArena *a, const char *project, const char *rel_path,
                                  CBMLanguage lang) {
+    if (cbm_lang_module_keeps_ext(lang)) {
+        return fqn_module_keep_ext(a, project, rel_path);
+    }
     if (!cbm_lang_module_is_dir(lang)) {
         // All other languages keep the legacy filename-stem module QN.
         return cbm_fqn_module(a, project, rel_path);
@@ -1293,7 +1336,7 @@ char *cbm_fqn_module_source_lang(CBMArena *a, const char *project, const char *r
 
 char *cbm_fqn_compute_source_lang(CBMArena *a, const char *project, const char *rel_path,
                                   const char *name, CBMLanguage lang) {
-    if (!cbm_lang_module_is_dir(lang)) {
+    if (!cbm_lang_module_is_dir(lang) && !cbm_lang_module_keeps_ext(lang)) {
         // All other languages keep the legacy filename-stem symbol QN.
         return cbm_fqn_compute(a, project, rel_path, name);
     }

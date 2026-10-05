@@ -779,6 +779,7 @@ static const char *LANG_NAMES[CBM_LANG_COUNT] = {
     [CBM_LANG_QML] = "QML",
     [CBM_LANG_CFSCRIPT] = "CFML",
     [CBM_LANG_CFML] = "CFML",
+    [CBM_LANG_DSL] = "DSL",
     [CBM_LANG_JANET] = "Janet",
     [CBM_LANG_SWAY] = "Sway",
     [CBM_LANG_NASM] = "NASM",
@@ -986,6 +987,58 @@ static bool has_dsl_control_flow(const char *buf) {
     return false;
 }
 
+/* True when a trimmed line looks like a DSL data statement that INI never
+ * produces: a `//` comment, a `$var =` / `@VAR =` assignment, or an array
+ * literal opening on its own line (`[` or `[[...`) — an INI section header is
+ * `[name]` on one line. Data-only DSL .conf files (tables, constants) carry no
+ * function/include/call marker, so without this they fell through to INI and
+ * their array rows became Class nodes and their assignments INI settings. */
+static bool is_dsl_data_line(const char *p) {
+    if (p[0] == '/' && p[SKIP_ONE] == '/') {
+        return true;
+    }
+    if (*p == '$' || *p == '@') {
+        const char *q = p + SKIP_ONE;
+        if (!isalpha((unsigned char)*q) && *q != '_') {
+            return false;
+        }
+        while (isalnum((unsigned char)*q) || *q == '_') {
+            q++;
+        }
+        while (*q == ' ' || *q == '\t') {
+            q++;
+        }
+        return *q == '=' && q[SKIP_ONE] != '=';
+    }
+    if (*p == '[') {
+        const char *q = p + SKIP_ONE;
+        while (*q == ' ' || *q == '\t') {
+            q++;
+        }
+        return *q == '\n' || *q == '\r' || *q == '\0' || *q == '[';
+    }
+    return false;
+}
+
+static bool has_dsl_data_marker(const char *buf) {
+    const char *line = buf;
+    while (*line) {
+        const char *p = line;
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+        if (is_dsl_data_line(p)) {
+            return true;
+        }
+        const char *nl = strchr(line, '\n');
+        if (!nl) {
+            break;
+        }
+        line = nl + SKIP_ONE;
+    }
+    return false;
+}
+
 static bool is_kconfig_format(const char *buf) {
     /* Kconfig/INI format: CONFIG_KEY=value or KEY=value, mostly uppercase keys */
     int config_lines = 0;
@@ -1104,7 +1157,7 @@ CBMLanguage cbm_disambiguate_conf(const char *path) {
 
     /* Check for DSL markers first */
     if (has_dsl_function_marker(buf) || has_dsl_include_marker(buf) ||
-        has_dsl_call_marker(buf) || has_dsl_control_flow(buf)) {
+        has_dsl_call_marker(buf) || has_dsl_control_flow(buf) || has_dsl_data_marker(buf)) {
         return CBM_LANG_DSL;
     }
 

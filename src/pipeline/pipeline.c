@@ -1001,6 +1001,48 @@ static bool file_qn_scheme_stale(cbm_store_t *s, const char *project,
     return false;
 }
 
+/* True when the stored index still holds DSL Modules under the legacy
+ * stem-only QN (main_wash.conf and main_wash.time shared "proj.dir.main_wash").
+ * DSL Modules now keep the extension, so an incremental run would leave the
+ * merged legacy Module beside the new per-file ones. Positive evidence only: a
+ * legacy-QN Module whose file_path is the probed file. Probes a few DSL files
+ * (an empty file has no Module under either scheme). */
+static bool dsl_module_scheme_stale(cbm_store_t *s, const char *project,
+                                    const cbm_file_info_t *files, int file_count) {
+    enum { DSL_PROBE_MAX = 16 };
+    int probed = 0;
+    for (int i = 0; i < file_count && probed < DSL_PROBE_MAX; i++) {
+        if (files[i].language != CBM_LANG_DSL || !files[i].rel_path) {
+            continue;
+        }
+        const char *rel = files[i].rel_path;
+        char *new_qn = cbm_pipeline_fqn_module_keep_ext(project, rel);
+        cbm_node_t node = {0};
+        bool current = new_qn &&
+                       cbm_store_find_node_by_qn(s, project, new_qn, &node) == CBM_STORE_OK &&
+                       node.file_path && strcmp(node.file_path, rel) == 0;
+        cbm_node_free_fields(&node);
+        free(new_qn);
+        if (current) {
+            return false;
+        }
+        /* Legacy scheme, reproduced on purpose for the probe only. */
+        char *old_qn = cbm_pipeline_fqn_module(project, rel);
+        cbm_node_t old = {0};
+        bool legacy = old_qn &&
+                      cbm_store_find_node_by_qn(s, project, old_qn, &old) == CBM_STORE_OK &&
+                      old.label && strcmp(old.label, "Module") == 0 && old.file_path &&
+                      strcmp(old.file_path, rel) == 0;
+        cbm_node_free_fields(&old);
+        free(old_qn);
+        if (legacy) {
+            return true;
+        }
+        probed++;
+    }
+    return false;
+}
+
 /* Try incremental pipeline or delete old DB for reindex.
  * Returns >= 0 if incremental was used (the return code), or -1 to proceed with full. */
 static int try_incremental_or_delete_db(cbm_pipeline_t *p, cbm_file_info_t *files, int file_count) {
@@ -1018,7 +1060,8 @@ static int try_incremental_or_delete_db(cbm_pipeline_t *p, cbm_file_info_t *file
         cbm_file_hash_t *hashes = NULL;
         int hash_count = 0;
         cbm_store_get_file_hashes(check_store, p->project_name, &hashes, &hash_count);
-        bool qn_stale = file_qn_scheme_stale(check_store, p->project_name, hashes, hash_count);
+        bool qn_stale = file_qn_scheme_stale(check_store, p->project_name, hashes, hash_count) ||
+                        dsl_module_scheme_stale(check_store, p->project_name, files, file_count);
         cbm_store_free_file_hashes(hashes, hash_count);
         cbm_store_close(check_store);
         if (qn_stale) {

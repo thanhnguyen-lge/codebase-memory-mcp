@@ -587,14 +587,6 @@ static void free_import_map(const char **keys, const char **vals, int count) {
     }
 }
 
-/* True for languages whose module QN derives from the CONTAINING DIRECTORY
- * (Java/Go package). MUST match cbm_lang_module_is_dir() (internal/cbm/helpers.c)
- * and pxc_module_is_dir() (pass_lsp_cross.c) so same-module callee resolution
- * keys against the directory-based def-node QNs in the registry. */
-static bool pp_module_is_dir(CBMLanguage lang) {
-    return lang == CBM_LANG_JAVA || lang == CBM_LANG_GO;
-}
-
 static bool is_checked_exception(const char *name) {
     if (!name) {
         return false;
@@ -2678,7 +2670,14 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
         const char **imp_vals = NULL;
         int imp_count = 0;
         uint64_t _imp_t0 = extract_now_ns();
-        build_import_map(rc->main_gbuf, rc->project_name, rel, &imp_keys, &imp_vals, &imp_count);
+        bool dsl_include = (lang == CBM_LANG_DSL);
+        if (dsl_include) {
+            cbm_pipeline_dsl_import_closure(rc->main_gbuf, rc->project_name, rel, &imp_keys,
+                                            &imp_vals, &imp_count);
+        } else {
+            build_import_map(rc->main_gbuf, rc->project_name, rel, &imp_keys, &imp_vals,
+                             &imp_count);
+        }
         atomic_fetch_add_explicit(&rc->time_ns_import_map, extract_now_ns() - _imp_t0,
                                   memory_order_relaxed);
 
@@ -2695,6 +2694,7 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
          * becomes O(1). Keys/values borrowed from imp_keys/imp_vals
          * which outlive this scope. */
         cbm_registry_import_map_cache_begin(imp_keys, imp_vals, imp_count);
+        cbm_registry_include_scope_begin(dsl_include);
 
         /* THE BIG ONE: per-file cache of cbm_registry_resolve results.
          * Same callee_name in multiple call sites resolves identically
@@ -2703,8 +2703,7 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
          * 98.7% hot spot in resolve_file_calls (881 of 893s CPU). */
         cbm_registry_resolve_cache_begin(result->calls.count + result->usages.count + 64);
 
-        char *module_qn =
-            cbm_pipeline_fqn_module_dir(rc->project_name, rel, pp_module_is_dir(lang));
+        char *module_qn = cbm_pipeline_fqn_module_lang(rc->project_name, rel, lang);
 
         /* ── Cross-file LSP (FUSED) ─────────────────────────────
          * Runs BEFORE resolve_file_calls so its additions to
@@ -2817,6 +2816,7 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
 
         cbm_registry_reach_cache_end();
         cbm_registry_import_map_cache_end();
+        cbm_registry_include_scope_end();
         cbm_registry_resolve_cache_end();
 
         free(module_qn);

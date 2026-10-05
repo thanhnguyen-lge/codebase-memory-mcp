@@ -131,17 +131,28 @@ char *cbm_fqn_compute(CBMArena *a, const char *project, const char *rel_path, co
 // Module QN (file without name): project.rel_path_parts
 char *cbm_fqn_module(CBMArena *a, const char *project, const char *rel_path);
 
+// True for languages whose module QN is the CONTAINING DIRECTORY (Java/Go package).
+bool cbm_lang_module_is_dir(CBMLanguage lang);
+
+// True for languages whose module QN keeps the file EXTENSION (DSL scripts).
+// Such projects ship sibling files sharing a stem (main_wash.conf next to
+// main_wash.time) and files named after a sibling directory (tumbling.conf next
+// to tumbling/); the stem-only module QN would merge them into one node.
+bool cbm_lang_module_keeps_ext(CBMLanguage lang);
+
 // Language-aware module QN. For directory-module languages (Java package, Go
 // package) the module is derived from the CONTAINING DIRECTORY (the filename
 // stem is NOT baked in): `Outer.java` at root -> "proj", `myapp/db/conn.go` ->
-// "proj.myapp.db". For every OTHER language this returns exactly what
-// cbm_fqn_module returns (no behavior change).
+// "proj.myapp.db". For extension-keeping languages (cbm_lang_module_keeps_ext)
+// the full file name is kept: `wash/main_wash.conf` -> "proj.wash.main_wash.conf".
+// For every OTHER language this returns exactly what cbm_fqn_module returns.
 char *cbm_fqn_module_source_lang(CBMArena *a, const char *project, const char *rel_path,
                                  CBMLanguage lang);
 
 // Language-aware symbol QN. For directory-module languages this is the
 // directory-based module + "." + name (so a top-level class `Outer` in
-// `Outer.java` is "proj.Outer", not "proj.Outer.Outer"). For every other
+// `Outer.java` is "proj.Outer", not "proj.Outer.Outer"). For extension-keeping
+// languages it is the full-file-name module + "." + name. For every other
 // language this is exactly cbm_fqn_compute (no behavior change).
 char *cbm_fqn_compute_source_lang(CBMArena *a, const char *project, const char *rel_path,
                                   const char *name, CBMLanguage lang);

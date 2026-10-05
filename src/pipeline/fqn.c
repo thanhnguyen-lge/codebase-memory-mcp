@@ -5,6 +5,8 @@
  * Handles Python __init__.py, JS/TS index.{js,ts}, path separators.
  */
 #include "pipeline/pipeline.h"
+#include "pipeline/pipeline_internal.h"
+#include "helpers.h" /* cbm_lang_module_is_dir, cbm_lang_module_keeps_ext */
 #include "foundation/constants.h"
 #include "foundation/platform.h"
 
@@ -191,6 +193,45 @@ char *cbm_pipeline_fqn_module_dir(const char *project, const char *rel_path, boo
     char *res = cbm_pipeline_fqn_folder(project, dir);
     free(dir);
     return res;
+}
+
+char *cbm_pipeline_fqn_module_keep_ext(const char *project, const char *rel_path) {
+    if (!project) {
+        return strdup("");
+    }
+    /* Every path segment kept verbatim (extension included) except a leading
+     * '.', which the extraction side (append_path_segments in helpers.c) drops
+     * too; the two MUST agree so pipeline lookups hit the extracted Module. */
+    char *path = strdup(rel_path ? rel_path : "");
+    cbm_normalize_path_sep(path);
+
+    const char *segments[CBM_SZ_256];
+    int seg_count = 0;
+    segments[seg_count++] = project;
+    int n = tokenize_path(path, segments + seg_count, FQN_MAX_PATH_SEGS);
+    for (int i = seg_count; i < seg_count + n; i++) {
+        if (segments[i][0] == '.') {
+            segments[i]++;
+        }
+    }
+    seg_count += n;
+    int kept = SKIP_ONE;
+    for (int i = SKIP_ONE; i < seg_count; i++) {
+        if (segments[i][0] != '\0') {
+            segments[kept++] = segments[i];
+        }
+    }
+
+    char *result = join_segments(segments, kept);
+    free(path);
+    return result;
+}
+
+char *cbm_pipeline_fqn_module_lang(const char *project, const char *rel_path, CBMLanguage lang) {
+    if (cbm_lang_module_keeps_ext(lang)) {
+        return cbm_pipeline_fqn_module_keep_ext(project, rel_path);
+    }
+    return cbm_pipeline_fqn_module_dir(project, rel_path, cbm_lang_module_is_dir(lang));
 }
 
 enum {

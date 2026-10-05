@@ -407,6 +407,55 @@ TEST(path_alias_loader_no_configs) {
     PASS();
 }
 
+/* ── Project config (.codebase-memory.json path_aliases) ───────── */
+
+/* Without a tsconfig the project config alone yields a root scope; with a
+ * root tsconfig its entries merge into that scope (both resolve). */
+TEST(path_alias_loader_project_config) {
+    char tmpl[256];
+    snprintf(tmpl, sizeof(tmpl), "/tmp/cbm_palias_proj_XXXXXX");
+    char *root = cbm_mkdtemp(tmpl);
+    ASSERT_NOT_NULL(root);
+
+    char cfg[512];
+    snprintf(cfg, sizeof(cfg), "%s/.codebase-memory.json", root);
+    ASSERT_EQ(write_file(cfg, "{\"path_aliases\": {\"common/*\": \"KR/base_spec/default/*\"}}\n"),
+              0);
+    cbm_path_alias_collection_t *coll = cbm_load_path_aliases(root);
+    ASSERT_NOT_NULL(coll);
+    ASSERT_EQ(coll->count, 1);
+    const cbm_path_alias_map_t *m = cbm_path_alias_find_for_file(coll, "KR/x/run.scr");
+    ASSERT_NOT_NULL(m);
+    char *r = cbm_path_alias_resolve(m, "common/conf/rinse/rinsing.conf");
+    ASSERT_NOT_NULL(r);
+    ASSERT_STR_EQ(r, "KR/base_spec/default/conf/rinse/rinsing.conf");
+    free(r);
+    cbm_path_alias_collection_free(coll);
+
+    char ts[512];
+    snprintf(ts, sizeof(ts), "%s/tsconfig.json", root);
+    ASSERT_EQ(write_file(ts, "{\"compilerOptions\": {\"paths\": {\"@/*\": [\"src/*\"]}}}\n"), 0);
+    coll = cbm_load_path_aliases(root);
+    ASSERT_NOT_NULL(coll);
+    ASSERT_EQ(coll->count, 1);
+    m = cbm_path_alias_find_for_file(coll, "a.ts");
+    ASSERT_NOT_NULL(m);
+    r = cbm_path_alias_resolve(m, "@/lib");
+    ASSERT_NOT_NULL(r);
+    ASSERT_STR_EQ(r, "src/lib");
+    free(r);
+    r = cbm_path_alias_resolve(m, "common/a.scr");
+    ASSERT_NOT_NULL(r);
+    ASSERT_STR_EQ(r, "KR/base_spec/default/a.scr");
+    free(r);
+    cbm_path_alias_collection_free(coll);
+
+    unlink(ts);
+    unlink(cfg);
+    rmdir(root);
+    PASS();
+}
+
 void suite_path_alias(void);
 void suite_path_alias(void) {
     RUN_TEST(path_alias_at_wildcard);
@@ -421,4 +470,5 @@ void suite_path_alias(void) {
     RUN_TEST(path_alias_loader_monorepo_dotdot_climb);
     RUN_TEST(path_alias_loader_honors_discovery_exclusions);
     RUN_TEST(path_alias_loader_no_configs);
+    RUN_TEST(path_alias_loader_project_config);
 }

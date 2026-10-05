@@ -1352,6 +1352,12 @@ const cbm_gbuf_node_t *cbm_pipeline_resolve_import_node(const cbm_pipeline_ctx_t
         return NULL;
     }
 
+    /* DSL INCLUDE()/RUN(): layer-prefixed script paths, resolved only to the
+     * included file's extension-keeping Module (never a guessed fallback). */
+    if (cbm_pipeline_is_dsl_source(ctx->gbuf, ctx->project_name, source_rel)) {
+        return cbm_pipeline_resolve_dsl_include(ctx, source_rel, imp->module_path);
+    }
+
     /* Strategy 1: module-path resolution → existing node (Python/TS/Go).
      * No label filter here: directory-module languages (Go/Java packages)
      * legitimately resolve straight to a Folder node -- that's the intended,

@@ -6,6 +6,7 @@
  */
 #include "test_framework.h"
 #include "../src/pipeline/pipeline.h"
+#include "../src/pipeline/pipeline_internal.h" /* cbm_pipeline_fqn_module_lang */
 #include "../src/foundation/str_util.h"
 
 #include <stdlib.h>
@@ -607,6 +608,29 @@ TEST(fqn_file_distinct_for_former_collisions) {
 }
 
 /* ================================================================
+ * cbm_pipeline_fqn_module_lang — DSL modules keep the extension
+ * ================================================================ */
+
+TEST(fqn_module_lang_dsl_keeps_extension) {
+    ASSERT_FQN(cbm_pipeline_fqn_module_lang("proj", "wash/main_wash.conf", CBM_LANG_DSL),
+               "proj.wash.main_wash.conf");
+    ASSERT_FQN(cbm_pipeline_fqn_module_lang("proj", "wash/main_wash.time", CBM_LANG_DSL),
+               "proj.wash.main_wash.time");
+    /* No collision with the sibling folder wash/tumbling/. */
+    ASSERT_FQN(cbm_pipeline_fqn_module_lang("proj", "wash/tumbling.conf", CBM_LANG_DSL),
+               "proj.wash.tumbling.conf");
+    PASS();
+}
+
+TEST(fqn_module_lang_other_languages_unchanged) {
+    ASSERT_FQN(cbm_pipeline_fqn_module_lang("proj", "pkg/util.py", CBM_LANG_PYTHON),
+               "proj.pkg.util");
+    ASSERT_FQN(cbm_pipeline_fqn_module_lang("proj", "myapp/db/conn.go", CBM_LANG_GO),
+               "proj.myapp.db");
+    PASS();
+}
+
+/* ================================================================
  * Suite
  * ================================================================ */
 
@@ -620,6 +644,8 @@ SUITE(fqn) {
     RUN_TEST(fqn_compute_basic_rs);
 
     /* fqn_file: File-node QNs */
+    RUN_TEST(fqn_module_lang_dsl_keeps_extension);
+    RUN_TEST(fqn_module_lang_other_languages_unchanged);
     RUN_TEST(fqn_file_keeps_extension);
     RUN_TEST(fqn_file_keeps_init_and_index);
     RUN_TEST(fqn_file_normalizes_backslash);

@@ -140,6 +140,33 @@ void cbm_pipeline_set_pkgmap(CBMHashTable *map);
 char *cbm_pipeline_resolve_module(const cbm_pipeline_ctx_t *ctx, const char *source_rel,
                                   const char *module_path);
 
+/* Language-aware module QN for a source file. MUST agree with the extraction
+ * side (cbm_fqn_module_source_lang in internal/cbm/helpers.c) so same-module
+ * resolution and enclosing-scope lookups hit the extracted def-node QNs:
+ * directory module for Java/Go, full file name for DSL, filename stem
+ * otherwise. Caller must free(). */
+char *cbm_pipeline_fqn_module_lang(const char *project, const char *rel_path, CBMLanguage lang);
+
+/* ── DSL INCLUDE()/RUN() (dsl_include.c) ─────────────────────── */
+
+/* True when `rel` was extracted as a DSL file (its extension-keeping Module
+ * node exists in the graph). */
+bool cbm_pipeline_is_dsl_source(const cbm_gbuf_t *gbuf, const char *project, const char *rel);
+
+/* Resolve a DSL include path to the included file's Module node: configured
+ * path_aliases first, then the layer-stripped path under the nearest ancestor
+ * directory of source_rel. NULL when unresolvable. */
+const cbm_gbuf_node_t *cbm_pipeline_resolve_dsl_include(const cbm_pipeline_ctx_t *ctx,
+                                                        const char *source_rel,
+                                                        const char *include_path);
+
+/* Import map for a DSL file: every Module reachable through nested IMPORTS
+ * (INCLUDE is textual), nearest first. Same ownership as build_import_map:
+ * keys are heap strings, vals borrowed from gbuf; free both arrays and keys. */
+int cbm_pipeline_dsl_import_closure(const cbm_gbuf_t *gbuf, const char *project,
+                                    const char *rel_path, const char ***out_keys,
+                                    const char ***out_vals, int *out_count);
+
 /* Upsert the File node for `rel` (name = basename, props = {"extension"}),
  * logging a warning if another file already holds the same File QN. Shared by
  * the full and incremental pipelines so both build identical File nodes.

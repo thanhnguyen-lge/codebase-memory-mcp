@@ -35,14 +35,6 @@ enum { PC_RING = 4, PC_RING_MASK = 3, PC_SIG_SCAN = 15, PC_REGEX_GRP = 2 };
 #include <stdlib.h>
 #include <string.h>
 
-/* True for languages whose module QN derives from the CONTAINING DIRECTORY
- * (Java/Go package). MUST match cbm_lang_module_is_dir() (internal/cbm/helpers.c)
- * so same-module callee resolution keys against the directory-based def-node
- * QNs in the registry. */
-static bool pc_module_is_dir(CBMLanguage lang) {
-    return lang == CBM_LANG_JAVA || lang == CBM_LANG_GO;
-}
-
 /* Read entire file into heap-allocated buffer. Caller must free(). */
 static char *read_file(const char *path, int *out_len) {
     FILE *f = cbm_fopen(path, "rb");
@@ -634,12 +626,18 @@ int cbm_pipeline_pass_calls(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *file
         const char **imp_keys = NULL;
         const char **imp_vals = NULL;
         int imp_count = 0;
-        build_import_map(ctx, rel, result, &imp_keys, &imp_vals, &imp_count);
+        bool dsl_include = (files[i].language == CBM_LANG_DSL);
+        if (dsl_include) {
+            cbm_pipeline_dsl_import_closure(ctx->gbuf, ctx->project_name, rel, &imp_keys,
+                                            &imp_vals, &imp_count);
+        } else {
+            build_import_map(ctx, rel, result, &imp_keys, &imp_vals, &imp_count);
+        }
+        cbm_registry_include_scope_begin(dsl_include);
 
         /* Compute module QN for same-module resolution (directory-based for
          * Java/Go so it matches their def-node QNs in the registry). */
-        char *module_qn = cbm_pipeline_fqn_module_dir(ctx->project_name, rel,
-                                                      pc_module_is_dir(files[i].language));
+        char *module_qn = cbm_pipeline_fqn_module_lang(ctx->project_name, rel, files[i].language);
 
         /* Resolve each call */
         for (int c = 0; c < result->calls.count; c++) {
@@ -656,6 +654,7 @@ int cbm_pipeline_pass_calls(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *file
             }
         }
 
+        cbm_registry_include_scope_end();
         free(module_qn);
         free_import_map(imp_keys, imp_vals, imp_count);
         if (result_owned) {
@@ -785,8 +784,8 @@ void cbm_pipeline_pass_fastapi_depends(cbm_pipeline_ctx_t *ctx, const cbm_file_i
             continue;
         }
 
-        char *module_qn = cbm_pipeline_fqn_module_dir(ctx->project_name, files[i].rel_path,
-                                                      pc_module_is_dir(files[i].language));
+        char *module_qn =
+            cbm_pipeline_fqn_module_lang(ctx->project_name, files[i].rel_path, files[i].language);
 
         /* Build import map for alias resolution */
         const char **imp_keys = NULL;
