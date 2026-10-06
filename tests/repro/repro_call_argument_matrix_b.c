@@ -672,6 +672,14 @@ static const char GN_INSIDE[] = "watched = true\n"
 static const char GN_BARE[] = "watched = true\n"
                               "copied = watched\n";
 
+/* LINC DSL: a script runs at file scope and `#name { }` functions take no
+ * parameters, so the argument is a dynamic `$var` read at module scope. The
+ * reference token is the identifier inside access_variable ("watched"). */
+static const char DSL_INSIDE[] = "$watched = 1;\n"
+                                 "ACCEPT($watched);\n";
+static const char DSL_BARE[] = "$watched = 1;\n"
+                               "$copied = $watched;\n";
+
 static const char BITBAKE_DOMAIN[] = "python do_run() {\n"
                                      "    bb.note('ready')\n"
                                      "}\n";
@@ -1045,6 +1053,9 @@ static const ModuleArgumentCase LINKERSCRIPT_CASE =
 static const ModuleArgumentCase GN_CASE =
     MODULE_ARGUMENT_CASE("GN", CBM_LANG_GN, "BUILD.gn", GN_INSIDE, GN_BARE, "call_expression",
                          "assert", "watched", 1, 0, "GN expression function with a value argument");
+static const ModuleArgumentCase DSL_CASE =
+    MODULE_ARGUMENT_CASE("DSL", CBM_LANG_DSL, "sample.scr", DSL_INSIDE, DSL_BARE, "call_function",
+                         "ACCEPT", "watched", 1, 0, "LINC DSL call with a dynamic variable argument");
 
 #undef MODULE_ARGUMENT_CASE
 #undef ROUTINE_ARGUMENT_CASE
@@ -1246,6 +1257,7 @@ TEST(repro_call_argument_matrix_b_module_just) {
 DEFINE_MODULE_ARGUMENT_TEST(gotemplate, GOTEMPLATE_CASE)
 DEFINE_MODULE_ARGUMENT_TEST(linkerscript, LINKERSCRIPT_CASE)
 DEFINE_MODULE_ARGUMENT_TEST(gn, GN_CASE)
+DEFINE_MODULE_ARGUMENT_TEST(dsl, DSL_CASE)
 
 #undef DEFINE_MODULE_ARGUMENT_TEST
 
@@ -1293,14 +1305,14 @@ TEST(repro_call_argument_matrix_b_domain_bitbake) {
 
 enum {
     ROUTINE_ARGUMENT_LANGUAGE_COUNT = 39,
-    MODULE_ARGUMENT_LANGUAGE_COUNT = 4,
+    MODULE_ARGUMENT_LANGUAGE_COUNT = 5,
     DOMAIN_CONTROL_LANGUAGE_COUNT = 6,
     MATRIX_LANGUAGE_COUNT = ROUTINE_ARGUMENT_LANGUAGE_COUNT + MODULE_ARGUMENT_LANGUAGE_COUNT +
                             DOMAIN_CONTROL_LANGUAGE_COUNT,
 };
 
-_Static_assert(MATRIX_LANGUAGE_COUNT == 49,
-               "RACKET..CHIALISP call-capable matrix must contain exactly 49 "
+_Static_assert(MATRIX_LANGUAGE_COUNT == 50,
+               "RACKET..CHIALISP (+DSL) call-capable matrix must contain exactly 50 "
                "language rows");
 
 #define MATRIX_B_LANGUAGE_ROWS(X)                                                               \
@@ -1349,6 +1361,7 @@ _Static_assert(MATRIX_LANGUAGE_COUNT == 49,
     X(repro_call_argument_matrix_b_module_gotemplate, GOTEMPLATE_CASE.identity.language)        \
     X(repro_call_argument_matrix_b_module_linkerscript, LINKERSCRIPT_CASE.identity.language)    \
     X(repro_call_argument_matrix_b_module_gn, GN_CASE.identity.language)                        \
+    X(repro_call_argument_matrix_b_module_dsl, DSL_CASE.identity.language)                      \
     X(repro_call_argument_matrix_b_domain_nasm, CBM_LANG_NASM)                                  \
     X(repro_call_argument_matrix_b_domain_prisma, CBM_LANG_PRISMA)                              \
     X(repro_call_argument_matrix_b_domain_diff, CBM_LANG_DIFF)                                  \
