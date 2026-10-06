@@ -667,6 +667,56 @@ TEST(project_name_length_capped_issue624) {
 }
 
 /* ================================================================
+ * cbm_pipeline_fqn_file — File nodes keep extension and stem
+ * ================================================================ */
+
+TEST(fqn_file_keeps_extension) {
+    ASSERT_FQN(cbm_pipeline_fqn_file("proj", "dir/watersupply.conf"),
+               "proj.dir.watersupply.conf.__file__");
+    ASSERT_FQN(cbm_pipeline_fqn_file("proj", "main.go"), "proj.main.go.__file__");
+    PASS();
+}
+
+TEST(fqn_file_keeps_init_and_index) {
+    ASSERT_FQN(cbm_pipeline_fqn_file("proj", "pkg/__init__.py"), "proj.pkg.__init__.py.__file__");
+    ASSERT_FQN(cbm_pipeline_fqn_file("proj", "web/index.ts"), "proj.web.index.ts.__file__");
+    PASS();
+}
+
+TEST(fqn_file_normalizes_backslash) {
+    ASSERT_FQN(cbm_pipeline_fqn_file("proj", "dir\\a.conf"), "proj.dir.a.conf.__file__");
+    PASS();
+}
+
+TEST(fqn_file_null_project) {
+    ASSERT_FQN(cbm_pipeline_fqn_file(NULL, "a.conf"), "");
+    PASS();
+}
+
+/* Pairs that collided under the stem scheme must now be distinct. */
+TEST(fqn_file_distinct_for_former_collisions) {
+    static const char *const pairs[][2] = {
+        {"dir/watersupply.conf", "dir/watersupply.time"},
+        {"dir/course.scr", "dir/course.tbl"},
+        {"web/api.ts", "web/api.js"},
+        {"pkg/index.ts", "pkg/index.js"},
+        {"py/__init__.py", "py/__init__.pyi"},
+        {"Makefile", "Makefile.am"},
+        {"py/__init__.py", "py.py"},
+    };
+    for (size_t i = 0; i < sizeof(pairs) / sizeof(pairs[0]); i++) {
+        char *a = cbm_pipeline_fqn_file("proj", pairs[i][0]);
+        char *b = cbm_pipeline_fqn_file("proj", pairs[i][1]);
+        ASSERT_NOT_NULL(a);
+        ASSERT_NOT_NULL(b);
+        ASSERT_STR_NEQ(a, b);
+        free(a);
+        free(b);
+    }
+    PASS();
+}
+
+/* ================================================================
  * Suite
  * ================================================================ */
 
@@ -682,6 +732,13 @@ SUITE(fqn) {
     RUN_TEST(fqn_module_qn_still_strips_extension);
     RUN_TEST(fqn_relative_js_import_preserves_dotted_basename_issue1682);
     RUN_TEST(fqn_compute_basic_rs);
+
+    /* fqn_file: File-node QNs */
+    RUN_TEST(fqn_file_keeps_extension);
+    RUN_TEST(fqn_file_keeps_init_and_index);
+    RUN_TEST(fqn_file_normalizes_backslash);
+    RUN_TEST(fqn_file_null_project);
+    RUN_TEST(fqn_file_distinct_for_former_collisions);
     RUN_TEST(fqn_compute_file_sibling_distinct);
     RUN_TEST(fqn_compute_symbol_still_strips);
     RUN_TEST(fqn_module_siblings_still_share);

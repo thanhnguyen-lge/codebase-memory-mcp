@@ -151,6 +151,13 @@ char *cbm_pipeline_fqn_module(const char *project, const char *rel_path) {
     return cbm_pipeline_fqn_compute(project, rel_path, NULL);
 }
 
+char *cbm_pipeline_fqn_file(const char *project, const char *rel_path) {
+    /* The "__file__" route of cbm_pipeline_fqn_compute already keeps the full
+     * filename (#1077/#964); this named entry point lets DSL code ask for a
+     * File QN without spelling the sentinel. */
+    return cbm_pipeline_fqn_compute(project, rel_path, "__file__");
+}
+
 char *cbm_pipeline_fqn_module_dir(const char *project, const char *rel_path, bool module_is_dir) {
     if (!module_is_dir) {
         /* Filename-stem module (default for all but Java/Go). */
