@@ -525,6 +525,9 @@ static void add_project_config_scope(cbm_path_alias_collection_t *coll, const ch
     }
     coll->scopes = grown;
     coll->scopes[coll->count].dir_prefix = prefix;
+    /* No tsconfig/jsconfig selected this scope. .codebase-memory.json itself
+     * is already hashed as a control file by the semantic manifest. */
+    coll->scopes[coll->count].source_rel_path = NULL;
     coll->scopes[coll->count].map = map;
     coll->count++;
 }
