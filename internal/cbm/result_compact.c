@@ -360,6 +360,7 @@ static void cr_walk(cr_ctx_t *c, CBMFileResult *r) {
     }
     cr_str(c, &r->module_qn);
     cr_str(c, &r->namespace_name);
+    cr_str(c, &r->dsl_reference_course);
     cr_list(c, &r->exports);
     cr_list(c, &r->constants);
     cr_list(c, &r->global_vars);

@@ -673,6 +673,256 @@ TEST(pipeline_dsl_modules_and_includes) {
     PASS();
 }
 
+/* Runtime mount layers, no path_aliases: a file below a `scripts` root resolves
+ * active/ reference/ lib/ common/ variable/ from its own place in the tree.
+ * reference/ takes the SET_REFERENCE_COURSE literal over the course folder; a
+ * shared base_spec/default file links reference/ to every course that has the
+ * file, never to a same-named file next to it. */
+#define DSL_ENTRY "WT/TW/25_AutoDT_Steam/ai_wash/run.scr"
+#define DSL_SHARED "WT/TW/base_spec/default/washer/conf/wash/wash.time"
+static const char *const k_dsl_layer_files[][2] = {
+    {DSL_ENTRY, "INCLUDE('reference/default.conf');\n"
+                "INCLUDE('common/common/util.scr');\n"
+                "INCLUDE('lib/common/pattern.scr');\n"
+                "INCLUDE('variable/model.conf');\n"
+                "INCLUDE('active/data.conf');\n"
+                "#run_proc {\n    !ref_fn;\n}\n"},
+    {"WT/TW/25_AutoDT_Steam/ai_wash/data.conf", "$d = 1;\n"},
+    {"WT/TW/25_AutoDT_Steam/default/model.conf", "$m = 1;\n"},
+    {"WT/TW/25_AutoDT_Steam/wool_like/run.scr",
+     "SET_REFERENCE_COURSE('wool');\nINCLUDE('reference/default.conf');\n"},
+    {"WT/TW/base_spec/ai_wash/default.conf", "#ref_fn {\n    return 1;\n}\n"},
+    {"WT/TW/base_spec/wool/default.conf", "#ref_fn {\n    return 2;\n}\n"},
+    {"WT/TW/base_spec/wool_like/default.conf", "#ref_fn {\n    return 3;\n}\n"},
+    {"WT/TW/base_spec/default/common/util.scr", "#util_fn {\n    return 1;\n}\n"},
+    {"lib/common/pattern.scr", "#lib_fn {\n    return 1;\n}\n"},
+    {DSL_SHARED, "INCLUDE('reference/wash/wash.conf');\n"},
+    {"WT/TW/base_spec/default/washer/conf/wash/wash.conf", "$decoy = 1;\n"},
+    {"WT/TW/base_spec/cotton/wash/wash.conf", "$w = 1;\n"},
+    {"WT/TW/base_spec/wool/wash/wash.conf", "$w = 2;\n"},
+};
+enum { DSL_LAYER_FILE_COUNT = (int)(sizeof(k_dsl_layer_files) / sizeof(k_dsl_layer_files[0])) };
+
+static int64_t dsl_node_id(cbm_store_t *s, const char *project, char *qn) {
+    cbm_node_t n = {0};
+    int64_t id = 0;
+    if (qn && cbm_store_find_node_by_qn(s, project, qn, &n) == CBM_STORE_OK) {
+        id = n.id;
+    }
+    cbm_node_free_fields(&n);
+    free(qn);
+    return id;
+}
+
+static bool dsl_imports(cbm_store_t *s, const char *project, const char *src, const char *dst) {
+    int64_t from = dsl_node_id(s, project, cbm_pipeline_fqn_file(project, src));
+    int64_t to = dsl_node_id(s, project, cbm_pipeline_fqn_module_keep_ext(project, dst));
+    bool hit = from && to && dsl_has_edge(s, from, "IMPORTS", to, NULL);
+    if (!hit) {
+        printf("  no IMPORTS %s -> %s\n", src, dst);
+    }
+    return hit;
+}
+
+TEST(pipeline_dsl_runtime_layers) {
+    char tmp[256];
+    snprintf(tmp, sizeof(tmp), "/tmp/cbm_dsl_layers_XXXXXX");
+    if (!cbm_mkdtemp(tmp)) {
+        FAIL("failed to create temp dir");
+    }
+    char repo[512];
+    snprintf(repo, sizeof(repo), "%s/scripts", tmp);
+    for (int i = 0; i < DSL_LAYER_FILE_COUNT; i++) {
+        ASSERT_EQ(th_write_file(TH_PATH(repo, k_dsl_layer_files[i][0]), k_dsl_layer_files[i][1]),
+                  0);
+    }
+    char db_path[640];
+    snprintf(db_path, sizeof(db_path), "%s/test.db", tmp);
+    cbm_pipeline_t *p = cbm_pipeline_new(repo, db_path, CBM_MODE_FULL);
+    ASSERT_NOT_NULL(p);
+    ASSERT_EQ(cbm_pipeline_run(p), 0);
+    char project[256];
+    snprintf(project, sizeof(project), "%s", cbm_pipeline_project_name(p));
+    cbm_pipeline_free(p);
+
+    cbm_store_t *s = cbm_store_open_path(db_path);
+    ASSERT_NOT_NULL(s);
+    bool reference = dsl_imports(s, project, DSL_ENTRY, "WT/TW/base_spec/ai_wash/default.conf");
+    bool common = dsl_imports(s, project, DSL_ENTRY, "WT/TW/base_spec/default/common/util.scr");
+    bool lib = dsl_imports(s, project, DSL_ENTRY, "lib/common/pattern.scr");
+    bool variable = dsl_imports(s, project, DSL_ENTRY, "WT/TW/25_AutoDT_Steam/default/model.conf");
+    bool active = dsl_imports(s, project, DSL_ENTRY, "WT/TW/25_AutoDT_Steam/ai_wash/data.conf");
+    bool literal = dsl_imports(s, project, "WT/TW/25_AutoDT_Steam/wool_like/run.scr",
+                               "WT/TW/base_spec/wool/default.conf");
+    bool fan_cotton = dsl_imports(s, project, DSL_SHARED, "WT/TW/base_spec/cotton/wash/wash.conf");
+    bool fan_wool = dsl_imports(s, project, DSL_SHARED, "WT/TW/base_spec/wool/wash/wash.conf");
+
+    /* Negative edges: the folder course loses to the literal, and the shared
+     * file never links the same-named decoy beside it. */
+    int64_t wool_like_file =
+        dsl_node_id(s, project, cbm_pipeline_fqn_file(project, "WT/TW/25_AutoDT_Steam/wool_like/run.scr"));
+    int64_t folder_ref = dsl_node_id(
+        s, project,
+        cbm_pipeline_fqn_module_keep_ext(project, "WT/TW/base_spec/wool_like/default.conf"));
+    int64_t shared_file = dsl_node_id(s, project, cbm_pipeline_fqn_file(project, DSL_SHARED));
+    int64_t decoy = dsl_node_id(
+        s, project,
+        cbm_pipeline_fqn_module_keep_ext(project,
+                                         "WT/TW/base_spec/default/washer/conf/wash/wash.conf"));
+    bool folder_wins = dsl_has_edge(s, wool_like_file, "IMPORTS", folder_ref, NULL);
+    bool decoy_hit = dsl_has_edge(s, shared_file, "IMPORTS", decoy, NULL);
+
+    /* A call through a reference/ include resolves into the course's file. */
+    char *ref_mod = cbm_pipeline_fqn_module_keep_ext(project, "WT/TW/base_spec/ai_wash/default.conf");
+    char ref_fn_qn[512];
+    snprintf(ref_fn_qn, sizeof(ref_fn_qn), "%s.ref_fn", ref_mod ? ref_mod : "");
+    free(ref_mod);
+    char *entry_mod = cbm_pipeline_fqn_module_keep_ext(project, DSL_ENTRY);
+    char run_proc_qn[512];
+    snprintf(run_proc_qn, sizeof(run_proc_qn), "%s.run_proc", entry_mod ? entry_mod : "");
+    free(entry_mod);
+    int64_t ref_fn = dsl_node_id(s, project, strdup(ref_fn_qn));
+    int64_t run_proc = dsl_node_id(s, project, strdup(run_proc_qn));
+    bool call = ref_fn && run_proc && dsl_has_edge(s, run_proc, "CALLS", ref_fn, NULL);
+
+    cbm_store_close(s);
+    th_rmtree(tmp);
+
+    ASSERT_TRUE(reference);
+    ASSERT_TRUE(common);
+    ASSERT_TRUE(lib);
+    ASSERT_TRUE(variable);
+    ASSERT_TRUE(active);
+    ASSERT_TRUE(literal);
+    ASSERT_FALSE(folder_wins);
+    ASSERT_TRUE(fan_cotton);
+    ASSERT_TRUE(fan_wool);
+    ASSERT_FALSE(decoy_hit);
+    ASSERT_TRUE(call);
+    PASS();
+}
+#undef DSL_ENTRY
+#undef DSL_SHARED
+
+/* A shared base_spec/default file links reference/ to every course (fan_out).
+ * An entry of one course that reaches it through common/ sees only its own
+ * course's copy; a call inside the shared file links every course's copy. */
+#define DSL_FAN_ENTRY "WT/TW/25_AutoDT_Steam/wool/run.scr"
+#define DSL_FAN_SHARED "WT/TW/base_spec/default/shared.scr"
+static const char *const k_dsl_fan_files[][2] = {
+    {DSL_FAN_ENTRY, "INCLUDE('common/shared.scr');\n#run_proc {\n    !wash_fn;\n}\n"},
+    {DSL_FAN_SHARED, "INCLUDE('reference/wash/wash.conf');\n#shared_proc {\n    !wash_fn;\n}\n"},
+    {"WT/TW/base_spec/ai_wash/wash/wash.conf", "#wash_fn {\n    return 1;\n}\n"},
+    {"WT/TW/base_spec/cotton/wash/wash.conf", "#wash_fn {\n    return 2;\n}\n"},
+    {"WT/TW/base_spec/wool/wash/wash.conf", "#wash_fn {\n    return 3;\n}\n"},
+};
+enum { DSL_FAN_FILE_COUNT = (int)(sizeof(k_dsl_fan_files) / sizeof(k_dsl_fan_files[0])) };
+
+/* Node id of function `name` defined in DSL file `rel`. */
+static int64_t dsl_fn_id(cbm_store_t *s, const char *project, const char *rel, const char *name) {
+    char *mod = cbm_pipeline_fqn_module_keep_ext(project, rel);
+    char qn[512];
+    snprintf(qn, sizeof(qn), "%s.%s", mod ? mod : "", name);
+    free(mod);
+    return dsl_node_id(s, project, strdup(qn));
+}
+
+TEST(pipeline_dsl_reference_fan_out_scope) {
+    char tmp[256];
+    snprintf(tmp, sizeof(tmp), "/tmp/cbm_dsl_fan_XXXXXX");
+    if (!cbm_mkdtemp(tmp)) {
+        FAIL("failed to create temp dir");
+    }
+    char repo[512];
+    snprintf(repo, sizeof(repo), "%s/scripts", tmp);
+    for (int i = 0; i < DSL_FAN_FILE_COUNT; i++) {
+        ASSERT_EQ(th_write_file(TH_PATH(repo, k_dsl_fan_files[i][0]), k_dsl_fan_files[i][1]), 0);
+    }
+    char db_path[640];
+    snprintf(db_path, sizeof(db_path), "%s/test.db", tmp);
+    cbm_pipeline_t *p = cbm_pipeline_new(repo, db_path, CBM_MODE_FULL);
+    ASSERT_NOT_NULL(p);
+    ASSERT_EQ(cbm_pipeline_run(p), 0);
+    char project[256];
+    snprintf(project, sizeof(project), "%s", cbm_pipeline_project_name(p));
+    cbm_pipeline_free(p);
+
+    cbm_store_t *s = cbm_store_open_path(db_path);
+    ASSERT_NOT_NULL(s);
+    int64_t entry_file = dsl_node_id(s, project, cbm_pipeline_fqn_file(project, DSL_FAN_ENTRY));
+    int64_t shared_file = dsl_node_id(s, project, cbm_pipeline_fqn_file(project, DSL_FAN_SHARED));
+    int64_t shared_mod =
+        dsl_node_id(s, project, cbm_pipeline_fqn_module_keep_ext(project, DSL_FAN_SHARED));
+    int64_t cotton_mod = dsl_node_id(
+        s, project,
+        cbm_pipeline_fqn_module_keep_ext(project, "WT/TW/base_spec/cotton/wash/wash.conf"));
+    int64_t run_proc = dsl_fn_id(s, project, DSL_FAN_ENTRY, "run_proc");
+    int64_t shared_proc = dsl_fn_id(s, project, DSL_FAN_SHARED, "shared_proc");
+    int64_t ai_wash = dsl_fn_id(s, project, "WT/TW/base_spec/ai_wash/wash/wash.conf", "wash_fn");
+    int64_t cotton = dsl_fn_id(s, project, "WT/TW/base_spec/cotton/wash/wash.conf", "wash_fn");
+    int64_t wool = dsl_fn_id(s, project, "WT/TW/base_spec/wool/wash/wash.conf", "wash_fn");
+
+    bool course_prop =
+        dsl_has_edge(s, entry_file, "IMPORTS", shared_mod, "\"reference_course\":\"wool\"");
+    bool fan_prop = dsl_has_edge(s, shared_file, "IMPORTS", cotton_mod, "\"fan_out\":\"cotton\"");
+    /* Entry of course wool: only wool's copy is in scope. */
+    bool entry_wool = dsl_has_edge(s, run_proc, "CALLS", wool, NULL);
+    bool entry_ai_wash = dsl_has_edge(s, run_proc, "CALLS", ai_wash, NULL);
+    bool entry_cotton = dsl_has_edge(s, run_proc, "CALLS", cotton, NULL);
+    /* Shared file: every course's copy. */
+    bool shared_ai_wash = dsl_has_edge(s, shared_proc, "CALLS", ai_wash, NULL);
+    bool shared_cotton =
+        dsl_has_edge(s, shared_proc, "CALLS", cotton, "\"strategy\":\"include_scope_fan_out\"");
+    bool shared_wool =
+        dsl_has_edge(s, shared_proc, "CALLS", wool, "\"strategy\":\"include_scope_fan_out\"");
+    cbm_store_close(s);
+
+    /* An index from before the include properties: strip them and the
+     * fan-out calls. Nothing changed on disk, so only a forced full reindex
+     * (dsl_include_props_stale) brings them back. */
+    sqlite3 *db = NULL;
+    ASSERT_EQ(sqlite3_open_v2(db_path, &db, SQLITE_OPEN_READWRITE, NULL), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(db,
+                           "UPDATE edges SET properties = json_object('local_name',"
+                           " json_extract(properties,'$.local_name')) WHERE type='IMPORTS';"
+                           "DELETE FROM edges WHERE type='CALLS' AND"
+                           " json_extract(properties,'$.strategy')='include_scope_fan_out';",
+                           NULL, NULL, NULL),
+              SQLITE_OK);
+    sqlite3_close(db);
+    p = cbm_pipeline_new(repo, db_path, CBM_MODE_FULL);
+    ASSERT_NOT_NULL(p);
+    ASSERT_EQ(cbm_pipeline_run(p), 0);
+    cbm_pipeline_free(p);
+    s = cbm_store_open_path(db_path);
+    ASSERT_NOT_NULL(s);
+    entry_file = dsl_node_id(s, project, cbm_pipeline_fqn_file(project, DSL_FAN_ENTRY));
+    shared_mod = dsl_node_id(s, project, cbm_pipeline_fqn_module_keep_ext(project, DSL_FAN_SHARED));
+    shared_proc = dsl_fn_id(s, project, DSL_FAN_SHARED, "shared_proc");
+    cotton = dsl_fn_id(s, project, "WT/TW/base_spec/cotton/wash/wash.conf", "wash_fn");
+    bool reindexed_prop =
+        dsl_has_edge(s, entry_file, "IMPORTS", shared_mod, "\"reference_course\":\"wool\"");
+    bool reindexed_fan = dsl_has_edge(s, shared_proc, "CALLS", cotton,
+                                      "\"strategy\":\"include_scope_fan_out\"");
+    cbm_store_close(s);
+    th_rmtree(tmp);
+
+    ASSERT_TRUE(run_proc && shared_proc && ai_wash && cotton && wool);
+    ASSERT_TRUE(course_prop);
+    ASSERT_TRUE(fan_prop);
+    ASSERT_TRUE(entry_wool);
+    ASSERT_FALSE(entry_ai_wash);
+    ASSERT_FALSE(entry_cotton);
+    ASSERT_TRUE(shared_ai_wash);
+    ASSERT_TRUE(shared_cotton);
+    ASSERT_TRUE(shared_wool);
+    ASSERT_TRUE(reindexed_prop);
+    ASSERT_TRUE(reindexed_fan);
+    PASS();
+}
+#undef DSL_FAN_ENTRY
+#undef DSL_FAN_SHARED
+
 /* A non-DSL file whose extension-keeping QN equals another file's stem-stripped
  * Module QN (foo/bar.py vs foo/bar/py.py, both proj.foo.bar.py) is not DSL;
  * otherwise its imports would be routed through DSL INCLUDE resolution. */
@@ -14845,6 +15095,8 @@ SUITE(pipeline) {
     RUN_TEST(pipeline_branch_root_structure);
     RUN_TEST(pipeline_file_qn_keeps_extension);
     RUN_TEST(pipeline_dsl_modules_and_includes);
+    RUN_TEST(pipeline_dsl_runtime_layers);
+    RUN_TEST(pipeline_dsl_reference_fan_out_scope);
     RUN_TEST(pipeline_dsl_source_requires_own_module);
     RUN_TEST(pipeline_incremental_file_node_matches_full);
     RUN_TEST(pipeline_project_name_derived);

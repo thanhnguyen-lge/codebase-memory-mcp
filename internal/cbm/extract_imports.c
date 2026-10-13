@@ -2933,14 +2933,46 @@ static void parse_hyprlang_imports(CBMExtractCtx *ctx) {
 // tree. Only a literal path is emitted; a computed one (FORMAT_STR(...), $var)
 // is unknowable statically. The pipeline maps the runtime layer prefix to a
 // repo path (dsl_include.c).
+/* The string literal of SET_REFERENCE_COURSE('x'), or NULL when `node` is
+ * any other call. */
+static char *dsl_reference_course_of(CBMExtractCtx *ctx, TSNode node) {
+    if (ts_node_named_child_count(node) != PAIR_LEN) {
+        return NULL;
+    }
+    TSNode name = ts_node_named_child(node, 0);
+    TSNode args = ts_node_named_child(node, SKIP_ONE);
+    if (strcmp(ts_node_type(name), "identifier") != 0 ||
+        strcmp(ts_node_type(args), "parenthesized_expression") != 0 ||
+        ts_node_named_child_count(args) != SKIP_ONE) {
+        return NULL;
+    }
+    char *callee = cbm_node_text(ctx->arena, name, ctx->source);
+    TSNode str = ts_node_named_child(args, 0);
+    if (!callee || strcmp(callee, "SET_REFERENCE_COURSE") != 0 ||
+        strcmp(ts_node_type(str), "string") != 0) {
+        return NULL;
+    }
+    char *course = strip_quotes(ctx->arena, cbm_node_text(ctx->arena, str, ctx->source));
+    return course && course[0] ? course : NULL;
+}
+
 static void parse_dsl_imports(CBMExtractCtx *ctx) {
     CBMArena *a = ctx->arena;
+    const char *course = NULL;
+    bool course_conflict = false;
     TSNodeStack stack;
     ts_nstack_init(&stack, ctx, CBM_SZ_512);
     ts_nstack_push(&stack, ctx->root);
     while (stack.count > 0) {
         TSNode node = ts_nstack_pop(&stack);
         const char *kind = ts_node_type(node);
+        if (strcmp(kind, "call_function") == 0) {
+            const char *c = dsl_reference_course_of(ctx, node);
+            if (c) {
+                course_conflict = course_conflict || (course && strcmp(course, c) != 0);
+                course = c;
+            }
+        }
         if (strcmp(kind, "include") == 0 || strcmp(kind, "run") == 0) {
             TSNode args = cbm_find_child_by_kind(node, "parenthesized_expression");
             bool one_arg = !ts_node_is_null(args) && ts_node_named_child_count(args) == SKIP_ONE;
@@ -2958,6 +2990,7 @@ static void parse_dsl_imports(CBMExtractCtx *ctx) {
         }
         ts_nstack_push_children(&stack, node);
     }
+    ctx->result->dsl_reference_course = course_conflict ? NULL : course;
 }
 
 // --- Main dispatch ---

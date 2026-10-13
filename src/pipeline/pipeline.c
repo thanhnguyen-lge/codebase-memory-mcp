@@ -1017,6 +1017,9 @@ typedef void (*predump_pass_fn)(cbm_pipeline_ctx_t *);
 static void predump_deco(cbm_pipeline_ctx_t *ctx) {
     cbm_pipeline_pass_decorator_tags(ctx->gbuf, ctx->project_name);
 }
+static void predump_dsl_fan_out(cbm_pipeline_ctx_t *ctx) {
+    cbm_pipeline_dsl_fan_out_calls(ctx->gbuf, ctx->project_name);
+}
 static void predump_route(cbm_pipeline_ctx_t *ctx) {
     cbm_pipeline_create_route_nodes(ctx->gbuf);
 }
@@ -1262,6 +1265,7 @@ static void run_predump_passes(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx) {
         bool moderate_only; /* true = skip in fast mode */
     } passes[] = {
         {predump_deco, "decorator_tags", false},
+        {predump_dsl_fan_out, "dsl_fan_out_calls", false},
         {predump_cfg, "configlink", false},
         {predump_route, "route_match", false},
         {predump_ensemble, "ensemble_routing", false},
@@ -1757,6 +1761,56 @@ static bool dsl_module_scheme_stale(cbm_store_t *s, const char *project,
     return false;
 }
 
+/* True when the stored index predates the reference_course / fan_out
+ * properties on DSL IMPORTS edges (dsl_include.c). The include closure and
+ * the fan-out call pass read them, and an incremental run only rebuilds the
+ * edges of changed files. Evidence: DSL files in a course folder always tag
+ * their IMPORTS edges with reference_course; stale only when none of the
+ * probed files that have IMPORTS edges carries it. */
+static bool dsl_include_props_stale(cbm_store_t *s, const char *project, const char *repo_path,
+                                    const cbm_file_info_t *files, int file_count) {
+    enum { DSL_PROBE_MAX = 16, DSL_SCAN_MAX = 256 };
+    int probed = 0;
+    int scanned = 0;
+    for (int i = 0; i < file_count && probed < DSL_PROBE_MAX && scanned < DSL_SCAN_MAX; i++) {
+        if (files[i].language != CBM_LANG_DSL || !files[i].rel_path) {
+            continue;
+        }
+        scanned++;
+        const char *rel = files[i].rel_path;
+        if (!cbm_pipeline_dsl_folder_course_known(repo_path, rel)) {
+            continue;
+        }
+        char *file_qn = cbm_pipeline_fqn_file(project, rel);
+        cbm_node_t node = {0};
+        bool found = file_qn && cbm_store_find_node_by_qn(s, project, file_qn, &node) == CBM_STORE_OK;
+        int64_t id = node.id;
+        cbm_node_free_fields(&node);
+        free(file_qn);
+        if (!found) {
+            continue;
+        }
+        cbm_edge_t *edges = NULL;
+        int n = 0;
+        if (cbm_store_find_edges_by_source_type(s, id, "IMPORTS", &edges, &n) != CBM_STORE_OK) {
+            continue;
+        }
+        bool tagged = false;
+        for (int e = 0; e < n && !tagged; e++) {
+            tagged = edges[e].properties_json &&
+                     strstr(edges[e].properties_json, "\"reference_course\":") != NULL;
+        }
+        cbm_store_free_edges(edges, n);
+        if (tagged) {
+            return false;
+        }
+        if (n > 0) {
+            probed++;
+        }
+    }
+    return probed > 0;
+}
+
 /* Route an existing generation. Full rebuilds never delete the live DB here:
  * publication owns the eventual atomic replacement after every pass and
  * metadata write has succeeded. */
@@ -1814,13 +1868,18 @@ static int try_incremental_or_delete_db(cbm_pipeline_t *p, cbm_file_info_t *file
      * built before DSL support, where .conf files were INI). Their hashes are
      * unchanged, so an incremental run would never re-extract them. */
     cbm_store_t *dsl_store = cbm_store_open_path_query(db_path);
-    bool dsl_stale =
-        dsl_store && dsl_module_scheme_stale(dsl_store, p->project_name, files, file_count);
+    const char *dsl_reason = NULL;
+    if (dsl_store && dsl_module_scheme_stale(dsl_store, p->project_name, files, file_count)) {
+        dsl_reason = "dsl_qn_scheme_reindex";
+    } else if (dsl_store && dsl_include_props_stale(dsl_store, p->project_name, p->repo_path,
+                                                    files, file_count)) {
+        dsl_reason = "dsl_include_props_reindex";
+    }
     if (dsl_store) {
         cbm_store_close(dsl_store);
     }
-    if (dsl_stale) {
-        cbm_log_info("pipeline.route", "path", "dsl_qn_scheme_reindex");
+    if (dsl_reason) {
+        cbm_log_info("pipeline.route", "path", dsl_reason);
         int adr_rc = capture_existing_adr(p, db_path);
         (void)cbm_unlink(db_path);
         (void)cbm_remove_db_sidecars(db_path);

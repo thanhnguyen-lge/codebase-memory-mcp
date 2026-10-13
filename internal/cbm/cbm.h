@@ -515,6 +515,10 @@ typedef struct CBMFileResult {
 
     const char *module_qn;      // module qualified name
     const char *namespace_name; // declared namespace/package (Java/Kotlin/C#/PHP), NULL if none
+    /* DSL only: the course of the file's single SET_REFERENCE_COURSE('x')
+     * literal, which the runtime mounts as the `reference/` include layer.
+     * NULL when the file has none, or more than one distinct course. */
+    const char *dsl_reference_course;
     const char **exports;       // NULL-terminated (NULL if none)
     const char **constants;     // NULL-terminated (NULL if none)
     const char **global_vars;   // NULL-terminated (NULL if none)

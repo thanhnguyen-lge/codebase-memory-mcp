@@ -458,9 +458,15 @@ static int create_import_edges_for_file(cbm_pipeline_ctx_t *ctx, const CBMFileRe
         free(file_qn);
         return 0;
     }
+    /* DSL: one include may link several Modules (dsl_include.c). */
+    bool dsl = cbm_pipeline_is_dsl_source(ctx->gbuf, ctx->project_name, rel);
     for (int j = 0; j < result->imports.count; j++) {
         const CBMImport *imp = &result->imports.items[j];
         if (!imp->module_path) {
+            continue;
+        }
+        if (dsl) {
+            count += cbm_pipeline_dsl_insert_include_edges(ctx, rel, result, imp, source_node);
             continue;
         }
         const cbm_gbuf_node_t *target =

@@ -879,6 +879,89 @@ TEST(coverage_range_never_ends_past_the_last_line_issue963) {
     PASS();
 }
 
+/* ── DSL: a missing `;` is not a parse failure ────────────────────────────────
+ *
+ * The DSL grammar requires `;` after every statement, but the runtime accepts a
+ * statement without it. Tree-sitter inserts a zero-width MISSING `semicolon`
+ * node and parses the statement normally, so nothing was dropped. Each fixture
+ * below was checked with `tree-sitter parse` to produce that exact node. */
+TEST(dsl_missing_semicolon_at_block_end_not_flagged) {
+    const char *src = "if ($x) {\n"
+                      "    $t = [1, 2, 3]\n" /* no `;` before the closing brace */
+                      "}\n"
+                      "$n = 1;\n";
+    CBMFileResult *r = do_extract(src, CBM_LANG_DSL, "block_end.scr");
+    ASSERT_NOT_NULL(r);
+    bool flagged = r->parse_incomplete;
+    cbm_free_result(r);
+    if (flagged) {
+        FAIL("a DSL statement without `;` must not be parse_partial");
+    }
+    PASS();
+}
+
+/* Tree-sitter places the MISSING node AFTER a trailing comment, not right
+ * after the statement. The rule must not depend on where the node lands. */
+TEST(dsl_missing_semicolon_before_comment_not_flagged) {
+    const char *src = "if ($x) {\n"
+                      "    $t = [1, 2](@LV)  // trailing note\n"
+                      "}\n";
+    CBMFileResult *r = do_extract(src, CBM_LANG_DSL, "comment.conf");
+    ASSERT_NOT_NULL(r);
+    bool flagged = r->parse_incomplete;
+    cbm_free_result(r);
+    if (flagged) {
+        FAIL("a DSL statement without `;` before a comment must not be parse_partial");
+    }
+    PASS();
+}
+
+/* A missing `;` inside a function body must not cost the function itself. */
+TEST(dsl_missing_semicolon_in_function_keeps_def) {
+    const char *src = "#helper {\n"
+                      "    !pattern_reset\n" /* call without `;` */
+                      "    $x = 1;\n"
+                      "}\n"
+                      "!helper;\n";
+    CBMFileResult *r = do_extract(src, CBM_LANG_DSL, "func.scr");
+    ASSERT_NOT_NULL(r);
+    bool flagged = r->parse_incomplete;
+    int found = has_def(r, "helper");
+    cbm_free_result(r);
+    if (flagged) {
+        FAIL("a DSL function body with a missing `;` must not be parse_partial");
+    }
+    if (!found) {
+        FAIL("the function containing the missing `;` must still be extracted");
+    }
+    PASS();
+}
+
+/* GUARD: skipping the missing `;` must not hide a real ERROR in the same file. */
+TEST(dsl_real_error_still_flagged_with_missing_semicolon) {
+    const char *src = "#helper {\n"
+                      "    !pattern_reset\n" /* missing `;` — benign */
+                      "    $x = 1;\n"
+                      "}\n"
+                      "$b = ) ] 3;\n"; /* line 5: real garbage */
+    CBMFileResult *r = do_extract(src, CBM_LANG_DSL, "broken.scr");
+    ASSERT_NOT_NULL(r);
+    bool flagged = r->parse_incomplete;
+    int covers_2 = r->error_ranges ? ranges_cover_line(r->error_ranges, 2) : 0;
+    int covers_5 = r->error_ranges ? ranges_cover_line(r->error_ranges, 5) : 0;
+    cbm_free_result(r);
+    if (!flagged) {
+        FAIL("a real DSL parse error must still be reported");
+    }
+    if (covers_2) {
+        FAIL("the missing `;` on line 2 must not be reported as a range");
+    }
+    if (!covers_5) {
+        FAIL("the reported range must point at the real error on line 5");
+    }
+    PASS();
+}
+
 SUITE(parse_coverage) {
     RUN_TEST(c_ifdef_split_brace_sets_parse_incomplete);
     RUN_TEST(c_ifdef_split_brace_neighbors_still_extracted);
@@ -917,4 +1000,8 @@ SUITE(parse_coverage) {
     RUN_TEST(c_thread_local_grammar_limit_is_pinned_issue963);
     RUN_TEST(coverage_repeated_error_line_reports_one_range_issue963);
     RUN_TEST(coverage_range_never_ends_past_the_last_line_issue963);
+    RUN_TEST(dsl_missing_semicolon_at_block_end_not_flagged);
+    RUN_TEST(dsl_missing_semicolon_before_comment_not_flagged);
+    RUN_TEST(dsl_missing_semicolon_in_function_keeps_def);
+    RUN_TEST(dsl_real_error_still_flagged_with_missing_semicolon);
 }

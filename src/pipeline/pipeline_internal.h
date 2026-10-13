@@ -224,19 +224,49 @@ char *cbm_pipeline_fqn_module_lang(const char *project, const char *rel_path, CB
  * node exists in the graph). */
 bool cbm_pipeline_is_dsl_source(const cbm_gbuf_t *gbuf, const char *project, const char *rel);
 
-/* Resolve a DSL include path to the included file's Module node: configured
- * path_aliases first, then the layer-stripped path under the nearest ancestor
- * directory of source_rel. NULL when unresolvable. */
+/* True when rel sits in a course folder below a script root
+ * ({root}/{region}/{country}/{capacity}/{course}/..., course not `default`),
+ * so every IMPORTS edge it has carries a reference_course. */
+bool cbm_pipeline_dsl_folder_course_known(const char *repo_path, const char *rel);
+
+/* Most Module nodes one DSL include may resolve to: a `reference/` include
+ * from a shared `default` folder links every course that has the file. */
+enum { CBM_DSL_INCLUDE_MAX_TARGETS = 128 };
+
+/* Insert the IMPORTS edges of one DSL include from source_node (the File of
+ * source_rel); `result` is that file's extraction result. The include resolves
+ * through configured path_aliases first, then the runtime mount layers of
+ * source_rel when it sits below a script root, else the layer-stripped path
+ * under the nearest ancestor directory. Edge properties:
+ *   local_name        the include path
+ *   reference_course  the including file's reference course, when known
+ *   fan_out           on a `reference/` include whose course is unknown, the
+ *                     course folder of this target (one edge per course)
+ * Returns the number of edges inserted. */
+int cbm_pipeline_dsl_insert_include_edges(cbm_pipeline_ctx_t *ctx, const char *source_rel,
+                                          const CBMFileResult *result, const CBMImport *imp,
+                                          const cbm_gbuf_node_t *source_node);
+
+/* First Module a DSL include resolves to (no reference course, no fan-out),
+ * or NULL when unresolvable. */
 const cbm_gbuf_node_t *cbm_pipeline_resolve_dsl_include(const cbm_pipeline_ctx_t *ctx,
                                                         const char *source_rel,
                                                         const char *include_path);
 
 /* Import map for a DSL file: every Module reachable through nested IMPORTS
- * (INCLUDE is textual), nearest first. Same ownership as build_import_map:
- * keys are heap strings, vals borrowed from gbuf; free both arrays and keys. */
+ * (INCLUDE is textual), nearest first. When rel_path has a reference course,
+ * a fan_out edge of another course is not followed. Same ownership as
+ * build_import_map: keys are heap strings, vals borrowed from gbuf; free both
+ * arrays and keys. */
 int cbm_pipeline_dsl_import_closure(const cbm_gbuf_t *gbuf, const char *project,
                                     const char *rel_path, const char ***out_keys,
                                     const char ***out_vals, int *out_count);
+
+/* After call resolution: a CALLS edge resolved through the include scope into
+ * one course of a fan_out include also links the same function in every other
+ * course of that include that is in the caller's import closure. Each added
+ * edge has strategy "include_scope_fan_out". Returns the number added. */
+int cbm_pipeline_dsl_fan_out_calls(cbm_gbuf_t *gbuf, const char *project);
 
 /* Resolve an import to its in-graph target node, or NULL if unresolvable.
  *

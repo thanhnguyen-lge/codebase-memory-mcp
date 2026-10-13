@@ -996,12 +996,30 @@ static bool cbm_is_eof_terminator_miss(TSNode n, const char *source, int source_
     return true;
 }
 
+/* DSL: the grammar requires `;` after every statement, but the runtime accepts
+ * a statement without it. A missing `;` makes tree-sitter insert a ZERO-WIDTH
+ * MISSING `semicolon` node and parse the statement normally, so nothing was
+ * dropped. Same reasoning as the #1610 rule above, but anywhere in the file.
+ *
+ * Narrow on purpose: DSL only, MISSING only (an ERROR node still counts), and
+ * only the named `semicolon` statement terminator — not an anonymous ";" such
+ * as the separators inside a `for (init; cond; step)` header. */
+static bool cbm_is_dsl_semicolon_miss(TSNode n, CBMLanguage lang) {
+    if (lang != CBM_LANG_DSL || !ts_node_is_missing(n)) {
+        return false;
+    }
+    if (ts_node_start_byte(n) != ts_node_end_byte(n)) {
+        return false;
+    }
+    return strcmp(ts_node_type(n), "semicolon") == 0;
+}
+
 /* Walks to the end even after the cap is full, so `dropped` is the real number
  * of ranges lost rather than a lower bound. This costs little: the walk never
  * descends into an ERROR subtree — it records the top-most node and moves on —
  * so it only visits the spine of nodes that contain an error, plus one level. */
 static void cbm_collect_error_regions(TSNode n, cbm_error_regions_t *acc, const char *source,
-                                      int source_len) {
+                                      int source_len, CBMLanguage lang) {
     uint32_t k = ts_node_child_count(n);
     for (uint32_t i = 0; i < k; i++) {
         TSNode c = ts_node_child(n, i);
@@ -1009,9 +1027,12 @@ static void cbm_collect_error_regions(TSNode n, cbm_error_regions_t *acc, const 
             if (cbm_is_eof_terminator_miss(c, source, source_len)) {
                 continue; /* absent final newline only — nothing was dropped */
             }
+            if (cbm_is_dsl_semicolon_miss(c, lang)) {
+                continue; /* DSL runtime accepts a missing `;` */
+            }
             cbm_error_regions_push(acc, c); /* top-most region; do not descend */
         } else if (ts_node_has_error(c)) {
-            cbm_collect_error_regions(c, acc, source, source_len);
+            cbm_collect_error_regions(c, acc, source, source_len, lang);
         }
     }
 }
@@ -2002,7 +2023,7 @@ static CBMFileResult *extract_file_ex_body(const char *source, int source_len, C
                      * already extract. */
                     if (ts_node_has_error(root)) {
                         cbm_error_regions_t raw_regs = {{0}, {0}, 0, 0};
-                        cbm_collect_error_regions(root, &raw_regs, source, source_len);
+                        cbm_collect_error_regions(root, &raw_regs, source, source_len, language);
                         if (raw_regs.count > 0) {
                             int defs_before = result->defs.count;
                             cbm_extract_definitions(&pp_ctx);
@@ -2213,7 +2234,7 @@ static CBMFileResult *extract_file_ex_body(const char *source, int source_len, C
         if (strcmp(ts_node_type(root), "ERROR") == 0) {
             cbm_error_regions_push(&regs, root); /* whole file unparseable */
         } else {
-            cbm_collect_error_regions(root, &regs, source, source_len);
+            cbm_collect_error_regions(root, &regs, source, source_len, language);
         }
         /* Recovery subtraction runs on the RAW ranges, before the Phase 2
          * refinement below. Its evidence is a whole definition that starts
