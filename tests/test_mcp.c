@@ -2471,6 +2471,47 @@ TEST(tool_search_graph_basic) {
     PASS();
 }
 
+/* An empty page caused by file_pattern must blame the pattern, not claim the
+ * label has no nodes; `*` spans directories, so '*.scr' finds nested files. */
+TEST(tool_search_graph_empty_file_pattern_hint) {
+    cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
+    cbm_store_t *st = cbm_mcp_server_store(srv);
+    const char *proj = "fp-hint";
+    cbm_mcp_server_set_project(srv, proj);
+    cbm_store_upsert_project(st, proj, "/tmp/fp-hint");
+    cbm_node_t fn = {.project = proj,
+                     .label = "Function",
+                     .name = "timer_check",
+                     .qualified_name = "fp-hint.base.proc.sw.scr.timer_check",
+                     .file_path = "base/proc/sw.scr",
+                     .start_line = 1,
+                     .end_line = 3};
+    ASSERT_GT(cbm_store_upsert_node(st, &fn), 0);
+
+    char *resp = cbm_mcp_handle_tool(srv, "search_graph",
+                                     "{\"project\":\"fp-hint\",\"label\":\"Function\","
+                                     "\"file_pattern\":\"*.conf\"}");
+    char *inner = extract_text_content(resp);
+    ASSERT_NOT_NULL(inner);
+    ASSERT_NOT_NULL(strstr(inner, "No nodes match file_pattern"));
+    ASSERT_NULL(strstr(inner, "No nodes have this label"));
+    free(inner);
+    free(resp);
+
+    resp = cbm_mcp_handle_tool(srv, "search_graph",
+                               "{\"project\":\"fp-hint\",\"label\":\"Function\","
+                               "\"file_pattern\":\"*.scr\"}");
+    inner = extract_text_content(resp);
+    ASSERT_NOT_NULL(inner);
+    ASSERT_NOT_NULL(strstr(inner, "timer_check"));
+    ASSERT_NULL(strstr(inner, "No nodes match file_pattern"));
+    free(inner);
+    free(resp);
+
+    cbm_mcp_server_free(srv);
+    PASS();
+}
+
 /* Forward declarations for helpers defined later in this file */
 static cbm_mcp_server_t *setup_snippet_server(char *tmp_dir, size_t tmp_sz);
 static void cleanup_snippet_dir(const char *tmp_dir);
@@ -7437,6 +7478,85 @@ TEST(tool_trace_path_evidence_columns_align_across_optional_modes) {
     ASSERT_NOT_NULL(strstr(inner, "ev-align.src.target 1 false lsp 0.95"));
     ASSERT_NOT_NULL(strstr(inner, "dotless_target 1 true heuristic 0.5"));
     ASSERT_NULL(strstr(inner, "qn = group prefix"));
+    free(inner);
+    free(response);
+
+    cbm_mcp_server_free(srv);
+    PASS();
+}
+
+/* A DSL module QN keeps the file extension (`proj.course.run.scr`). Grouped
+ * output must split it before the file name (row `run.scr`), not at the last
+ * dot (a function-like row `scr`). Modules without the extension in their QN
+ * keep the last-segment split. */
+TEST(tool_trace_path_groups_extension_module_by_file_name) {
+    cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
+    cbm_store_t *st = cbm_mcp_server_store(srv);
+    const char *proj = "dsl-mod";
+    cbm_mcp_server_set_project(srv, proj);
+    cbm_store_upsert_project(st, proj, "/tmp/dsl-mod");
+    cbm_node_t target = {.project = proj,
+                         .label = "Function",
+                         .name = "all_load_off",
+                         .qualified_name = "dsl-mod.lib.common.scr.all_load_off",
+                         .file_path = "lib/common.scr",
+                         .start_line = 1,
+                         .end_line = 3};
+    cbm_node_t dsl_module = {.project = proj,
+                             .label = "Module",
+                             .name = "course/run.scr",
+                             .qualified_name = "dsl-mod.course.run.scr",
+                             .file_path = "course/run.scr",
+                             .start_line = 1,
+                             .end_line = 9};
+    cbm_node_t dsl_func = {.project = proj,
+                           .label = "Function",
+                           .name = "run_proc",
+                           .qualified_name = "dsl-mod.course.run.scr.run_proc",
+                           .file_path = "course/run.scr",
+                           .start_line = 2,
+                           .end_line = 4};
+    cbm_node_t py_module = {.project = proj,
+                            .label = "Module",
+                            .name = "util",
+                            .qualified_name = "dsl-mod.pkg.util",
+                            .file_path = "pkg/util.py",
+                            .start_line = 1,
+                            .end_line = 5};
+    int64_t target_id = cbm_store_upsert_node(st, &target);
+    int64_t caller_ids[3] = {cbm_store_upsert_node(st, &dsl_module),
+                             cbm_store_upsert_node(st, &dsl_func),
+                             cbm_store_upsert_node(st, &py_module)};
+    ASSERT_GT(target_id, 0);
+    for (int i = 0; i < 3; i++) {
+        ASSERT_GT(caller_ids[i], 0);
+        cbm_edge_t edge = {.project = proj,
+                           .source_id = caller_ids[i],
+                           .target_id = target_id,
+                           .type = "CALLS",
+                           .properties_json = "{}"};
+        ASSERT_GT(cbm_store_insert_edge(st, &edge), 0);
+    }
+
+    char *response = cbm_mcp_handle_tool(
+        srv, "trace_path",
+        "{\"project\":\"dsl-mod\",\"function_name\":\"all_load_off\",\"direction\":\"inbound\","
+        "\"format\":\"json\"}");
+    char *inner = extract_text_content(response);
+    ASSERT_NOT_NULL(inner);
+    yyjson_doc *doc = yyjson_read(inner, strlen(inner), 0);
+    ASSERT_NOT_NULL(doc);
+    yyjson_val *callers = yyjson_obj_get(yyjson_doc_get_root(doc), "callers");
+    ASSERT_NOT_NULL(callers);
+    const char *prefix = NULL;
+    ASSERT_NOT_NULL(trace_grouped_row_named(callers, "run.scr", &prefix));
+    ASSERT_STR_EQ(prefix, "dsl-mod.course");
+    ASSERT_NULL(trace_grouped_row_named(callers, "scr", NULL));
+    ASSERT_NOT_NULL(trace_grouped_row_named(callers, "run_proc", &prefix));
+    ASSERT_STR_EQ(prefix, "dsl-mod.course.run.scr");
+    ASSERT_NOT_NULL(trace_grouped_row_named(callers, "util", &prefix));
+    ASSERT_STR_EQ(prefix, "dsl-mod.pkg");
+    yyjson_doc_free(doc);
     free(inner);
     free(response);
 
@@ -20350,6 +20470,7 @@ SUITE(mcp) {
     RUN_TEST(tool_get_file_outline_returns_bounded_filtered_columnar_rows_issue469);
     RUN_TEST(tool_get_file_outline_validates_json_path_limit_and_cancel_issue469);
     RUN_TEST(tool_search_graph_basic);
+    RUN_TEST(tool_search_graph_empty_file_pattern_hint);
     RUN_TEST(tool_search_graph_semantic_only_skips_structural_results_issue1295);
     RUN_TEST(tool_search_graph_grouped_dotless_qn_round_trips);
     RUN_TEST(tool_trace_totals_respect_test_filter);
@@ -20413,6 +20534,7 @@ SUITE(mcp) {
     RUN_TEST(tool_trace_path_unreadable_confidence_reports_not_recorded);
     RUN_TEST(tool_trace_path_edge_details_use_canonical_predecessor);
     RUN_TEST(tool_trace_path_evidence_columns_align_across_optional_modes);
+    RUN_TEST(tool_trace_path_groups_extension_module_by_file_name);
     RUN_TEST(tool_trace_call_path_depth_clamped);
     RUN_TEST(tool_trace_call_path_distinct_defs_not_over_unioned);
     RUN_TEST(tool_trace_call_path_dts_stub_unions_with_impl);

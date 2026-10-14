@@ -3810,6 +3810,51 @@ TEST(dsl_qualified_names_keep_extension) {
     PASS();
 }
 
+/* `ASYNC.NEW(fn)` starts script function fn without the `!` prefix: it is a
+ * call of fn, not a plain value usage. Capitalized names are not script
+ * functions, and variables stay ordinary arguments. */
+TEST(dsl_async_new_bare_name_is_call) {
+    CBMFileResult *r = extract("#worker {\n    PRINT('w');\n}\n"
+                               "#runner {\n"
+                               "    $a = ASYNC.NEW(worker);\n"
+                               "    $b = ASYNC.NEW(worker, { 0 });\n"
+                               "    $c = ASYNC.NEW(Native);\n"
+                               "    $d = ASYNC.NEW($var);\n"
+                               "    $e = ASYNC.NEW( // start\n"
+                               "        worker);\n"
+                               "}\n"
+                               "$top = ASYNC.NEW(worker);\n",
+                               CBM_LANG_DSL, "t", "proc/run.scr");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    int runner_lines = 0; /* bit per source line of a worker call in #runner */
+    int at_top = 0;
+    for (int i = 0; i < r->calls.count; i++) {
+        const CBMCall *c = &r->calls.items[i];
+        ASSERT(strcmp(c->callee_name, "Native") != 0);
+        if (strcmp(c->callee_name, "worker") != 0) {
+            continue;
+        }
+        if (c->enclosing_func_qn && strcmp(c->enclosing_func_qn, "t.proc.run.scr.runner") == 0) {
+            runner_lines |= 1 << c->start_line;
+        } else {
+            at_top++;
+        }
+    }
+    ASSERT_EQ(runner_lines, (1 << 5) | (1 << 6) | (1 << 10));
+    ASSERT_EQ(at_top, 1);
+    /* The ASYNC.NEW arguments are consumed by the calls above; only the
+     * `#worker` declaration name itself may remain. */
+    for (int i = 0; i < r->usages.count; i++) {
+        const CBMUsage *u = &r->usages.items[i];
+        if (strcmp(u->ref_name, "worker") == 0) {
+            ASSERT_STR_EQ(u->enclosing_func_qn, "t.proc.run.scr.worker");
+        }
+    }
+    cbm_free_result(r);
+    PASS();
+}
+
 /* --- JSON (5 tests) --- */
 
 TEST(json_basic_pair) {
@@ -7871,6 +7916,7 @@ SUITE(extraction) {
     RUN_TEST(dsl_include_and_run_imports_at_any_depth);
     RUN_TEST(dsl_globals_are_variables_but_not_function_locals);
     RUN_TEST(dsl_qualified_names_keep_extension);
+    RUN_TEST(dsl_async_new_bare_name_is_call);
     RUN_TEST(ini_basic_section_and_setting);
     RUN_TEST(ini_multiple_sections);
     RUN_TEST(ini_global_keys);

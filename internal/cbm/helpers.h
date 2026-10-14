@@ -221,6 +221,12 @@ bool cbm_lang_module_is_dir(CBMLanguage lang);
 // to tumbling/); the stem-only module QN would merge them into one node.
 bool cbm_lang_module_keeps_ext(CBMLanguage lang);
 
+// DSL: `ASYNC.NEW(fn, ...)` starts script function `fn` as a thread; the `!` call
+// prefix may be omitted there. Returns the bare identifier `fn` for such a
+// call_function, or a null node (also when the name starts with a capital or a
+// digit, which the runtime does not treat as a script function).
+TSNode cbm_dsl_async_new_target(TSNode call, const char *source);
+
 // Language-aware module QN. For directory-module languages (Java package, Go
 // package) the module is derived from the CONTAINING DIRECTORY (the filename
 // stem is NOT baked in): `Outer.java` at root -> "proj", `myapp/db/conn.go` ->

@@ -4417,6 +4417,25 @@ static size_t sg_qn_prefix_len(const char *qn) {
     return last ? (size_t)(last - qn) : 0;
 }
 
+/* Node-aware qn-prefix. A Module whose QN keeps the file extension (DSL:
+ * `proj.dir.run.scr`) splits before the file name, so the row reads `run.scr`
+ * instead of a function-like `scr`. Every other node uses sg_qn_prefix_len. */
+static size_t sg_node_qn_prefix_len(const cbm_node_t *node) {
+    const char *qn = node->qualified_name ? node->qualified_name : "";
+    const char *file = node->file_path;
+    if (node->label && strcmp(node->label, "Module") == 0 && file) {
+        const char *base = strrchr(file, '/');
+        base = base ? base + 1 : file;
+        size_t qlen = strlen(qn);
+        size_t blen = strlen(base);
+        if (strchr(base, '.') && qlen > blen && qn[qlen - blen - 1] == '.' &&
+            strcmp(qn + qlen - blen, base) == 0) {
+            return qlen - blen - 1;
+        }
+    }
+    return sg_qn_prefix_len(qn);
+}
+
 typedef struct {
     int returned;
     int fields_returned;
@@ -4681,7 +4700,7 @@ static void emit_search_results_grouped_tree(cbm_sb_t *sb, const cbm_search_outp
         const cbm_search_result_t *sr = &out->results[i];
         const char *qn = sr->node.qualified_name ? sr->node.qualified_name : "";
         const char *file = sr->node.file_path ? sr->node.file_path : "";
-        size_t plen = sg_qn_prefix_len(qn);
+        size_t plen = sg_node_qn_prefix_len(&sr->node);
         bool same_group = previous_prefix && strlen(previous_prefix) == plen &&
                           memcmp(previous_prefix, qn, plen) == 0 && previous_file &&
                           strcmp(previous_file, file) == 0;
@@ -4837,7 +4856,7 @@ static void emit_search_results_tree_json(yyjson_mut_doc *doc, yyjson_mut_val *r
         const cbm_search_result_t *sr = &out->results[i];
         const char *qn = sr->node.qualified_name ? sr->node.qualified_name : "";
         const char *file = sr->node.file_path ? sr->node.file_path : "";
-        size_t plen = sg_qn_prefix_len(qn);
+        size_t plen = sg_node_qn_prefix_len(&sr->node);
         bool same_group = previous_prefix && strlen(previous_prefix) == plen &&
                           memcmp(previous_prefix, qn, plen) == 0 && previous_file &&
                           strcmp(previous_file, file) == 0;
@@ -5201,7 +5220,16 @@ static char *handle_search_graph(cbm_mcp_server_t *srv, const char *args) {
     if (semantic_only && vcount == 0) {
         diagnostic_hint = "No semantic matches; use a moderate/full index or broader keywords.";
     } else if (!semantic_only && out.total == 0) {
-        if (name_pattern && label) {
+        /* file_pattern narrows every other filter, so the empty page may come
+         * from it or from them: name both instead of reading as a missing
+         * label. */
+        if (file_pattern) {
+            diagnostic_hint = "No nodes match file_pattern combined with the other filters. "
+                              "file_pattern is a glob over the repo-relative path ('*' spans '/', "
+                              "e.g. '*.scr', 'lib/*.scr'); without '*' or '?' it is a substring "
+                              "match. Retry without file_pattern or without the other filters "
+                              "to see which one excludes everything.";
+        } else if (name_pattern && label) {
             diagnostic_hint = "No results; remove label or broaden name_pattern.";
         } else if (name_pattern) {
             diagnostic_hint = "No nodes match; check spelling or broaden the regex.";
@@ -8730,7 +8758,7 @@ static yyjson_mut_val *bfs_to_tree_json(yyjson_mut_doc *doc, cbm_traverse_result
         }
         const char *qn =
             tr->visited[i].node.qualified_name ? tr->visited[i].node.qualified_name : "";
-        size_t plen = sg_qn_prefix_len(qn);
+        size_t plen = sg_node_qn_prefix_len(&tr->visited[i].node);
         if (!have_group || strlen(cur_group) != plen || memcmp(cur_group, qn, plen) != 0) {
             char *next_group = cbm_strndup(qn, plen);
             if (!next_group) {
@@ -8854,7 +8882,7 @@ static void bfs_to_tree_table(cbm_sb_t *sb, const char *key, cbm_traverse_result
     char *cur_group = NULL;
     for (int i = 0; i < ordered_count; i++) {
         const char *qn = ordered[i].node.qualified_name ? ordered[i].node.qualified_name : "";
-        size_t plen = sg_qn_prefix_len(qn);
+        size_t plen = sg_node_qn_prefix_len(&ordered[i].node);
         if (!cur_group || strlen(cur_group) != plen || memcmp(cur_group, qn, plen) != 0) {
             char *next_group = cbm_strndup(qn, plen);
             if (!next_group) {
@@ -9972,11 +10000,60 @@ static void try_artifact_bootstrap(const char *project_name, const char *repo_pa
  * count is still reported via "count" + "truncated". */
 enum { INDEX_EXCLUDED_DIR_CAP = 5 }; /* examples only — see INDEX_SKIPPED_FILE_CAP note */
 
+/* True when an excluded dir is the root of its own git checkout (.git dir,
+ * .git file of a submodule/worktree, or .git symlink from a repo manifest). */
+static bool excluded_dir_is_nested_repo(const char *repo_path, const char *rel_dir) {
+    if (!repo_path || !repo_path[0] || !rel_dir || !rel_dir[0]) {
+        return false;
+    }
+    char git_path[CBM_SZ_4K];
+    int n = snprintf(git_path, sizeof(git_path), "%s/%s/.git", repo_path, rel_dir);
+    return n > 0 && (size_t)n < sizeof(git_path) && cbm_file_exists(git_path);
+}
+
+/* List the excluded dirs that are nested git repositories. A parent repo that
+ * ignores a mounted child repo (e.g. "/scripts/" in a repo-manifest checkout)
+ * silently drops the whole child, so name them and say how to index them.
+ * Scans every excluded dir, not only the ones shown in "dirs". */
+static void add_excluded_nested_repos(yyjson_mut_doc *doc, yyjson_mut_val *excluded,
+                                      const char *repo_path, char **excluded_dirs,
+                                      int excluded_count) {
+    yyjson_mut_val *nested = yyjson_mut_arr(doc);
+    int nested_count = 0;
+    const char *first = NULL;
+    for (int i = 0; i < excluded_count; i++) {
+        if (!excluded_dir_is_nested_repo(repo_path, excluded_dirs[i])) {
+            continue;
+        }
+        if (nested_count < INDEX_EXCLUDED_DIR_CAP) {
+            yyjson_mut_arr_add_strcpy(doc, nested, excluded_dirs[i]);
+        }
+        if (!first) {
+            first = excluded_dirs[i];
+        }
+        nested_count++;
+    }
+    if (nested_count == 0) {
+        return;
+    }
+    yyjson_mut_obj_add_val(doc, excluded, "nested_repos", nested);
+    yyjson_mut_obj_add_int(doc, excluded, "nested_repo_count", nested_count);
+    char hint[CBM_SZ_4K];
+    snprintf(hint, sizeof(hint),
+             "%d excluded dir(s) are nested git repositories, so none of their files were "
+             "indexed. To index one, call index_repository with its own path, e.g. "
+             "repo_path=\"%s/%s\".",
+             nested_count, repo_path, first);
+    yyjson_mut_obj_add_strcpy(doc, excluded, "hint", hint);
+}
+
 /* Attach a compact summary of directory subtrees skipped during discovery (#411).
- * Shape: "excluded": {"dirs": [up to 25 rel-paths], "count": <total>, "truncated": <bool>}.
+ * Shape: "excluded": {"dirs": [up to INDEX_EXCLUDED_DIR_CAP rel-paths], "count": <total>,
+ * "truncated": <bool>}, plus "nested_repos"/"nested_repo_count"/"hint" when some
+ * excluded dirs are nested git repositories.
  * No-op when nothing was excluded. excluded_dirs[] is borrowed (copied into doc). */
-static void add_excluded_summary(yyjson_mut_doc *doc, yyjson_mut_val *root, char **excluded_dirs,
-                                 int excluded_count) {
+static void add_excluded_summary(yyjson_mut_doc *doc, yyjson_mut_val *root, const char *repo_path,
+                                 char **excluded_dirs, int excluded_count) {
     if (!excluded_dirs || excluded_count <= 0) {
         return;
     }
@@ -9991,6 +10068,7 @@ static void add_excluded_summary(yyjson_mut_doc *doc, yyjson_mut_val *root, char
     yyjson_mut_obj_add_val(doc, excluded, "dirs", dirs);
     yyjson_mut_obj_add_int(doc, excluded, "count", excluded_count);
     yyjson_mut_obj_add_bool(doc, excluded, "truncated", excluded_count > INDEX_EXCLUDED_DIR_CAP);
+    add_excluded_nested_repos(doc, excluded, repo_path, excluded_dirs, excluded_count);
     yyjson_mut_obj_add_val(doc, root, "excluded", excluded);
 }
 
@@ -10300,7 +10378,7 @@ static bool build_index_success_response(cbm_mcp_server_t *srv, yyjson_mut_doc *
                                          char **excluded_dirs, int excluded_count,
                                          const cbm_file_error_t *file_errors, int file_error_count,
                                          const char *logfile) {
-    add_excluded_summary(doc, root, excluded_dirs, excluded_count);
+    add_excluded_summary(doc, root, repo_path, excluded_dirs, excluded_count);
     add_not_indexed_files_summary(doc, root, p);
 
     int exp_nodes = -1;

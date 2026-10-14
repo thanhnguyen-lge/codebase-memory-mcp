@@ -2628,6 +2628,15 @@ void handle_usages(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec, Wal
     if (is_forward_sibling_callee(ctx->language, node)) {
         return;
     }
+    // DSL `ASYNC.NEW(fn)`: the call walk records `fn` as a CALLS target.
+    if (ctx->language == CBM_LANG_DSL && strcmp(ts_node_type(node), "identifier") == 0) {
+        TSNode args = ts_node_parent(node);
+        TSNode call = ts_node_is_null(args) ? args : ts_node_parent(args);
+        TSNode target = cbm_dsl_async_new_target(call, ctx->source);
+        if (!ts_node_is_null(target) && ts_node_eq(node, target)) {
+            return;
+        }
+    }
     if (is_call_argument_label_walk(node, state)) {
         return;
     }

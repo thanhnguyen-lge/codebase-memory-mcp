@@ -1582,6 +1582,44 @@ bool cbm_lang_module_keeps_ext(CBMLanguage lang) {
     return lang == CBM_LANG_DSL;
 }
 
+TSNode cbm_dsl_async_new_target(TSNode call, const char *source) {
+    TSNode none = {0};
+    if (ts_node_is_null(call) || strcmp(ts_node_type(call), "call_function") != 0 ||
+        ts_node_named_child_count(call) < 2) {
+        return none;
+    }
+    static const char k_async_new[] = "ASYNC.NEW";
+    TSNode callee = ts_node_named_child(call, 0);
+    uint32_t cs = ts_node_start_byte(callee);
+    uint32_t ce = ts_node_end_byte(callee);
+    if (strcmp(ts_node_type(callee), "identifier") != 0 || ce - cs != sizeof(k_async_new) - 1 ||
+        memcmp(source + cs, k_async_new, ce - cs) != 0) {
+        return none;
+    }
+    TSNode args = ts_node_named_child(call, 1);
+    if (strcmp(ts_node_type(args), "parenthesized_expression") != 0) {
+        return none;
+    }
+    // A comment is an extra named child: `ASYNC.NEW( // c\n fn)`.
+    TSNode target = none;
+    uint32_t nargs = ts_node_named_child_count(args);
+    for (uint32_t i = 0; i < nargs; i++) {
+        TSNode child = ts_node_named_child(args, i);
+        if (strcmp(ts_node_type(child), "comment") != 0) {
+            target = child;
+            break;
+        }
+    }
+    if (ts_node_is_null(target) || strcmp(ts_node_type(target), "identifier") != 0) {
+        return none;
+    }
+    char first = source[ts_node_start_byte(target)];
+    if ((first >= 'A' && first <= 'Z') || (first >= '0' && first <= '9')) {
+        return none;
+    }
+    return target;
+}
+
 // Module QN with the full file name kept: project + every path segment as-is.
 static char *fqn_module_keep_ext(CBMArena *a, const char *project, const char *rel_path) {
     if (!project) {

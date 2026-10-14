@@ -793,6 +793,70 @@ TEST(index_not_indexed_by_design_reported) {
     PASS();
 }
 
+/* INV(nested-repo-excluded): a parent .gitignore that hides a mounted child
+ * repository (repo-manifest checkouts: "/scripts/" with its own .git) drops
+ * the whole child. "excluded" must name it under "nested_repos" with a hint
+ * that points at the child's own path; a plain ignored dir is not listed. */
+TEST(index_excluded_nested_repo_reported) {
+    RProj lp;
+    memset(&lp, 0, sizeof(lp));
+    snprintf(lp.tmpdir, sizeof(lp.tmpdir), "/tmp/cbm_resil_XXXXXX");
+    if (!cbm_mkdtemp(lp.tmpdir)) {
+        FAIL("mkdtemp failed");
+    }
+    rh_to_fwd_slashes(lp.tmpdir);
+
+    ri_write_text(lp.tmpdir, ".gitignore", "/scripts/\ngenerated/\n");
+    ri_write_text(lp.tmpdir, "good.py", "def alpha():\n    return 1\n");
+    char sub[700];
+    snprintf(sub, sizeof(sub), "%s/scripts", lp.tmpdir);
+    cbm_mkdir(sub);
+    ri_write_text(sub, "child.py", "def child():\n    return 2\n");
+    snprintf(sub, sizeof(sub), "%s/scripts/.git", lp.tmpdir);
+    cbm_mkdir(sub);
+    snprintf(sub, sizeof(sub), "%s/generated", lp.tmpdir);
+    cbm_mkdir(sub);
+    ri_write_text(sub, "gen.py", "def generated():\n    return 3\n");
+
+    char *resp = NULL;
+    cbm_store_t *store = ri_index_capture(&lp, &resp);
+    if (!resp) {
+        FAIL("no MCP response");
+    }
+    if (!store) {
+        free(resp);
+        FAIL("store did not open");
+    }
+
+    yyjson_doc *d = yyjson_read(resp, strlen(resp), 0);
+    ASSERT_NOT_NULL(d);
+    yyjson_val *sc = yyjson_obj_get(yyjson_doc_get_root(d), "structuredContent");
+    ASSERT_NOT_NULL(sc);
+    yyjson_val *excluded = yyjson_obj_get(sc, "excluded");
+    ASSERT_NOT_NULL(excluded);
+    ASSERT_EQ(yyjson_get_int(yyjson_obj_get(excluded, "count")), 2);
+
+    /* Only the dir with its own .git is a nested repo. */
+    ASSERT_EQ(yyjson_get_int(yyjson_obj_get(excluded, "nested_repo_count")), 1);
+    yyjson_val *nested = yyjson_obj_get(excluded, "nested_repos");
+    ASSERT_NOT_NULL(nested);
+    ASSERT_EQ((int)yyjson_arr_size(nested), 1);
+    ASSERT_STR_EQ("scripts", yyjson_get_str(yyjson_arr_get(nested, 0)));
+
+    /* The hint names the child's absolute path to index it on its own. */
+    const char *hint = yyjson_get_str(yyjson_obj_get(excluded, "hint"));
+    ASSERT_NOT_NULL(hint);
+    char want[800];
+    snprintf(want, sizeof(want), "%s/scripts", lp.tmpdir);
+    ASSERT_NOT_NULL(strstr(hint, want));
+    ASSERT_NOT_NULL(strstr(hint, "index_repository"));
+
+    yyjson_doc_free(d);
+    free(resp);
+    rh_cleanup(&lp, store);
+    PASS();
+}
+
 /* INV(relative-repo-path, #794): index_repository with repo_path "." must
  * canonicalize to the absolute path BEFORE anything derives from it. On
  * v0.8.1 the literal "." flowed through: the project was named "root", the
@@ -903,5 +967,6 @@ SUITE(index_resilience) {
     RUN_TEST(index_parse_partial_clears_on_fix);
     RUN_TEST(index_parse_unusable_names_the_range_end);
     RUN_TEST(index_not_indexed_by_design_reported);
+    RUN_TEST(index_excluded_nested_repo_reported);
     RUN_TEST(index_relative_repo_path_canonicalized);
 }

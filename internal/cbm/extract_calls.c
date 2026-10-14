@@ -3835,6 +3835,20 @@ CBMInvocationDescriptor handle_calls(CBMExtractCtx *ctx, TSNode node, const CBML
                     }
                 }
             }
+
+            // DSL `ASYNC.NEW(fn)` runs script function `fn`, like `!fn`.
+            if (ctx->language == CBM_LANG_DSL) {
+                TSNode target = cbm_dsl_async_new_target(node, ctx->source);
+                if (!ts_node_is_null(target)) {
+                    CBMCall acall = {0};
+                    acall.callee_name = cbm_node_text(ctx->arena, target, ctx->source);
+                    acall.enclosing_func_qn = call.enclosing_func_qn;
+                    acall.start_line = (int)ts_node_start_point(target).row + TS_LINE_OFFSET;
+                    acall.site_start_byte = ts_node_start_byte(target);
+                    acall.site_end_byte = ts_node_end_byte(target);
+                    cbm_calls_push(&ctx->result->calls, ctx->arena, acall);
+                }
+            }
         }
     }
 
